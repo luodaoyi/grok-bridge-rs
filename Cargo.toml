@@ -1,0 +1,18 @@
+[package]
+name = "grok-bridge"
+version = "0.1.0"
+edition = "2024"
+description = "A minimal STDIO JSON wrapper for invoking Grok Build"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["macros", "process", "rt-multi-thread", "time"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

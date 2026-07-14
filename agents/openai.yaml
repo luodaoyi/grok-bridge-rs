@@ -1,0 +1,7 @@
+interface:
+  display_name: "Grok Build"
+  short_description: "Delegate coding tasks to Grok Build CLI"
+  default_prompt: "Use $grok-build to delegate this implementation to Grok, then inspect the result and verify the changes."
+
+policy:
+  allow_implicit_invocation: true

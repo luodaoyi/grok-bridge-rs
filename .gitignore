@@ -1,0 +1,6 @@
+/target/
+/dist/
+/.serena/
+*.zip
+.DS_Store
+Thumbs.db

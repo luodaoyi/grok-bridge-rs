@@ -1,0 +1,104 @@
+name: Build and release Skill
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo test
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo build --release --locked
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: target/x86_64-pc-windows-msvc/release/grok-bridge.exe
+          - platform: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: target/aarch64-pc-windows-msvc/release/grok-bridge.exe
+          - platform: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            binary: target/aarch64-apple-darwin/release/grok-bridge
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: target/x86_64-unknown-linux-gnu/release/grok-bridge
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: target/aarch64-unknown-linux-gnu/release/grok-bridge
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble Skill archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="package/grok-build"
+          mkdir -p "$root/agents"
+          mkdir -p "$root/bin/windows-arm64" "$root/bin/windows-x86_64"
+          mkdir -p "$root/bin/macos-arm64" "$root/bin/linux-arm64" "$root/bin/linux-x86_64"
+          cp SKILL.md "$root/SKILL.md"
+          cp agents/openai.yaml "$root/agents/openai.yaml"
+          cp artifacts/windows-arm64/grok-bridge.exe "$root/bin/windows-arm64/grok-bridge.exe"
+          cp artifacts/windows-x86_64/grok-bridge.exe "$root/bin/windows-x86_64/grok-bridge.exe"
+          cp artifacts/macos-arm64/grok-bridge "$root/bin/macos-arm64/grok-bridge"
+          cp artifacts/linux-arm64/grok-bridge "$root/bin/linux-arm64/grok-bridge"
+          cp artifacts/linux-x86_64/grok-bridge "$root/bin/linux-x86_64/grok-bridge"
+          chmod +x "$root/bin/macos-arm64/grok-bridge"
+          chmod +x "$root/bin/linux-arm64/grok-bridge"
+          chmod +x "$root/bin/linux-x86_64/grok-bridge"
+          archive="grok-build-skill-${GITHUB_REF_NAME}.zip"
+          (cd package && zip -r "../$archive" grok-build)
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="grok-build-skill-${GITHUB_REF_NAME}.zip"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" \
+              --verify-tag \
+              --generate-notes \
+              --title "grok-build ${GITHUB_REF_NAME}"
+          fi
