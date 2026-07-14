@@ -15,7 +15,7 @@ Use the platform binary bundled beside this file. Resolve `<skill-dir>` as the d
 - Linux ARM64/aarch64: `<skill-dir>/bin/linux-arm64/grok-bridge`
 - Linux x86_64/AMD64: `<skill-dir>/bin/linux-x86_64/grok-bridge`
 
-Run `<wrapper> doctor` when Grok availability is uncertain. Every protocol command writes one JSON object with `ok` and either `result` or `error`.
+Run `<wrapper> doctor` when Grok availability is uncertain. Set `GROK_BRIDGE_STATE_DIR` before the first command when session data must live somewhere other than the platform default. Every protocol command writes one JSON object with `ok` and either `result` or `error`.
 
 ## Session workflow
 
@@ -26,6 +26,7 @@ Run `<wrapper> doctor` when Grok availability is uncertain. Every protocol comma
 5. Inspect the diff and run repository checks independently.
 6. Before a follow-up, read remaining events. Send a focused JSON prompt through `send --session <handle>`, then repeat `read`/`wait`. The wrapper owns Grok's resume UUID.
 7. Use `stop --session <handle>` to terminate active work. Stop after five total implementation rounds unless the user requests more.
+8. After final audit and when no follow-up is needed, use `remove --session <handle>` to delete the non-active session's local state and events.
 
 Useful commands:
 
@@ -35,6 +36,7 @@ Useful commands:
 <wrapper> read --session <handle> --cursor 0 --limit 200 --wait-ms 5000
 <wrapper> wait --session <handle> --for tui-idle --timeout-ms 300000
 <wrapper> stop --session <handle>
+<wrapper> remove --session <handle>
 ```
 
 ## Windows UTF-8 invocation

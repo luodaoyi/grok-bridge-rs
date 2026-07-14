@@ -144,6 +144,12 @@ struct StopResult {
 }
 
 #[derive(Debug, Serialize)]
+struct RemoveResult {
+    handle: String,
+    removed: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct ListResult {
     sessions: Vec<SessionState>,
 }
@@ -296,6 +302,12 @@ async fn dispatch() -> Result<()> {
             let result = stop_session(handle)?;
             write_success(&result)
         }
+        "remove" => {
+            let options = parse_options(&arguments[1..], &["--session"])?;
+            let handle = required_option(&options, "--session")?;
+            let result = remove_session(handle)?;
+            write_success(&result)
+        }
         "list" => {
             ensure_no_arguments(&arguments[1..])?;
             let result = list_sessions()?;
@@ -331,7 +343,7 @@ async fn dispatch() -> Result<()> {
 
 fn print_help() {
     println!(
-        "grok-bridge {}\n\nUSAGE:\n  grok-bridge start\n  grok-bridge status --session <handle>\n  grok-bridge read --session <handle> [--cursor <n>] [--limit <n>] [--wait-ms <n>]\n  grok-bridge wait --session <handle> [--for tui-idle|exit] [--timeout-ms <n>]\n  grok-bridge send --session <handle>\n  grok-bridge stop --session <handle>\n  grok-bridge list\n  grok-bridge doctor\n\nSTART reads one UTF-8 JSON object from STDIN. SEND reads one UTF-8 JSON object containing prompt and optional timeout_seconds. All protocol commands write one JSON object to STDOUT.",
+        "grok-bridge {}\n\nUSAGE:\n  grok-bridge start\n  grok-bridge status --session <handle>\n  grok-bridge read --session <handle> [--cursor <n>] [--limit <n>] [--wait-ms <n>]\n  grok-bridge wait --session <handle> [--for tui-idle|exit] [--timeout-ms <n>]\n  grok-bridge send --session <handle>\n  grok-bridge stop --session <handle>\n  grok-bridge remove --session <handle>\n  grok-bridge list\n  grok-bridge doctor\n\nSTART reads one UTF-8 JSON object from STDIN. SEND reads one UTF-8 JSON object containing prompt and optional timeout_seconds. REMOVE deletes a non-active session and its local events. All protocol commands write one JSON object to STDOUT.",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -347,6 +359,7 @@ fn start_session(request: StartRequest) -> Result<StartResult> {
     let root = state_root()?;
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create state directory: {}", root.display()))?;
+    set_private_directory_permissions(&root)?;
 
     let (handle, paths) = create_session_directory(&root)?;
     let now = now_millis();
@@ -852,16 +865,14 @@ fn mark_worker_failure(handle: &str, error: &str) -> Result<()> {
 }
 
 fn acquire_worker_lock(paths: &SessionPaths) -> Result<WorkerLock> {
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&paths.lock)
-        .with_context(|| {
-            format!(
-                "session already has an active worker: {}",
-                paths.directory.display()
-            )
-        })?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    open_private_file(&mut options, &paths.lock).with_context(|| {
+        format!(
+            "session already has an active worker: {}",
+            paths.directory.display()
+        )
+    })?;
     Ok(WorkerLock {
         path: paths.lock.clone(),
     })
@@ -1021,7 +1032,7 @@ fn stop_session(handle: &str) -> Result<StopResult> {
     let paths = SessionPaths::new(handle)?;
     let mut state = load_state(&paths)?;
     if state.phase.is_active() {
-        File::create(&paths.stop)
+        let _file = create_private_file(&paths.stop)
             .with_context(|| format!("failed to request stop: {}", paths.stop.display()))?;
         return Ok(StopResult {
             accepted: true,
@@ -1041,6 +1052,34 @@ fn stop_session(handle: &str) -> Result<StopResult> {
     Ok(StopResult {
         accepted: false,
         state,
+    })
+}
+
+fn remove_session(handle: &str) -> Result<RemoveResult> {
+    let paths = SessionPaths::new(handle)?;
+    let state = load_state(&paths)?;
+    if state.phase.is_active() {
+        bail!("cannot remove an active session; stop it and wait for exit first");
+    }
+
+    let root = fs::canonicalize(state_root()?).context("failed to resolve state directory")?;
+    let directory = fs::canonicalize(&paths.directory).with_context(|| {
+        format!(
+            "failed to resolve session directory: {}",
+            paths.directory.display()
+        )
+    })?;
+    ensure_direct_child(&root, &directory)?;
+    fs::remove_dir_all(&directory).with_context(|| {
+        format!(
+            "failed to remove session directory: {}",
+            directory.display()
+        )
+    })?;
+
+    Ok(RemoveResult {
+        handle: handle.to_owned(),
+        removed: true,
     })
 }
 
@@ -1271,6 +1310,59 @@ fn decode_and_clip(bytes: &[u8]) -> (String, bool) {
     )
 }
 
+fn create_private_file(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    open_private_file(&mut options, path)
+}
+
+fn open_private_file(options: &mut OpenOptions, path: &Path) -> Result<File> {
+    configure_private_file_creation(options);
+    let file = options.open(path)?;
+    set_private_file_permissions(path)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn configure_private_file_creation(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
+}
+
+#[cfg(not(unix))]
+fn configure_private_file_creation(_options: &mut OpenOptions) {}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to protect state file: {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_directory_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to protect state directory: {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_private_directory_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn ensure_direct_child(root: &Path, directory: &Path) -> Result<()> {
+    if directory.parent() == Some(root) {
+        return Ok(());
+    }
+    bail!("refusing to remove a path outside the state directory")
+}
+
 fn state_root() -> Result<PathBuf> {
     if let Some(path) = env::var_os("GROK_BRIDGE_STATE_DIR") {
         return Ok(PathBuf::from(path));
@@ -1330,7 +1422,10 @@ fn create_session_directory(root: &Path) -> Result<(String, SessionPaths)> {
             directory: root.join(&handle),
         };
         match fs::create_dir(&paths.directory) {
-            Ok(()) => return Ok((handle, paths)),
+            Ok(()) => {
+                set_private_directory_permissions(&paths.directory)?;
+                return Ok((handle, paths));
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(error).with_context(|| {
@@ -1347,7 +1442,7 @@ fn create_session_directory(root: &Path) -> Result<(String, SessionPaths)> {
 
 fn save_state(paths: &SessionPaths, state: &SessionState) -> Result<()> {
     let data = serde_json::to_vec(state).context("failed to serialize session state")?;
-    let mut file = File::create(&paths.state)
+    let mut file = create_private_file(&paths.state)
         .with_context(|| format!("failed to write state: {}", paths.state.display()))?;
     file.write_all(&data)
         .with_context(|| format!("failed to write state: {}", paths.state.display()))?;
@@ -1396,10 +1491,9 @@ fn append_event(
         text,
         detail,
     };
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.events)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    let mut file = open_private_file(&mut options, &paths.events)
         .with_context(|| format!("failed to append events: {}", paths.events.display()))?;
     serde_json::to_writer(&mut file, &event).context("failed to serialize session event")?;
     file.write_all(b"\n")
@@ -1414,10 +1508,9 @@ fn write_turn_request(paths: &SessionPaths, request: &TurnRequest) -> Result<()>
         bail!("session already has a pending request");
     }
     let data = serde_json::to_vec(request).context("failed to serialize turn request")?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&paths.request)
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    let mut file = open_private_file(&mut options, &paths.request)
         .with_context(|| format!("failed to write request: {}", paths.request.display()))?;
     file.write_all(&data)
         .with_context(|| format!("failed to write request: {}", paths.request.display()))?;
@@ -1695,6 +1788,43 @@ mod tests {
         assert_eq!(second.events.len(), 1);
         assert_eq!(second.events[0].kind, "three");
         assert!(!second.limited);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn removal_target_must_be_a_direct_state_child() {
+        let root = test_directory("remove-root");
+        let session = root.join("gb-1234-abcd-0");
+        let nested = session.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let session = fs::canonicalize(session).unwrap();
+        let nested = fs::canonicalize(nested).unwrap();
+
+        assert!(ensure_direct_child(&root, &session).is_ok());
+        assert!(ensure_direct_child(&root, &nested).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_state_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = test_directory("private-permissions");
+        fs::create_dir_all(&directory).unwrap();
+        set_private_directory_permissions(&directory).unwrap();
+        let file = directory.join("state.json");
+        create_private_file(&file).unwrap();
+
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 

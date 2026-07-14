@@ -11,7 +11,8 @@
 5. 返回 `idle` 后，独立执行 `git status --short`、`git diff --check`、`git diff` 以及项目要求的测试、lint、格式化和构建。
 6. 审计失败时，先读取剩余事件，再用同一 handle 的 `send` 提交只针对证据和根因的返工 prompt。wrapper 自动恢复 Grok UUID。
 7. 最多自动返工五轮；仍未通过则停止并报告根因、改动和未完成项。
-8. 不得删除测试、降低安全检查、吞掉异常，也不得自动 commit、push、merge、创建 PR 或执行不可逆操作。
+8. 最终审计完成且不再续轮后，调用 `remove --session <handle>` 清理本地会话状态和事件。
+9. 不得删除测试、降低安全检查、吞掉异常，也不得自动 commit、push、merge、创建 PR 或执行不可逆操作。
 
 Windows PowerShell 5.1 调用 `start` 或 `send` 前必须设置：
 

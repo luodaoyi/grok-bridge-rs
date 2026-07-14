@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `remove --session <handle>` for explicit cleanup of non-active local session data.
+- Restricted Unix state directories to mode `0700` and session files to `0600`.
+- Documented `GROK_BRIDGE_STATE_DIR` in the Skill, upgraded GitHub artifact Actions to their Node.js 24-native major versions, and added Ubuntu CI for `main` and pull requests.
+
 ## 0.2.0 - 2026-07-14
 
 - Replaced the blocking one-request protocol with stateful `start`, `status`, `read`, `wait`, `send`, `stop`, and `list` CLI commands.

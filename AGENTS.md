@@ -11,6 +11,8 @@
 - wrapper 句柄用于 `status/read/wait/send/stop`；Grok UUID 仅由 worker 保存，续轮通过 `--resume <UUID>` 恢复。
 - 后台 worker 直接消费 `streaming-json`。保留 activity、heartbeat、文本、usage 和结束状态，不持久化 thought 文本或完整 prompt。
 - `read` 必须保持 cursor 增量语义；`wait --for tui-idle` 只有成功进入 `idle` 才算达成。
+- `remove` 只能删除非活动会话，并且删除目标必须是状态根目录的直接子目录。
+- Unix 状态目录必须保持 `0700`，状态、事件、请求、停止标记和 worker 锁文件必须保持 `0600`。
 - Windows PowerShell 5.1 调用示例必须先把 `$OutputEncoding` 和 `[Console]::OutputEncoding` 设置为无 BOM UTF-8，不能使用默认 ASCII/旧代码页处理协议。
 - 保留目录 canonicalize、`GROK_BRIDGE_ALLOWED_ROOTS`、超时、输出截断、prompt 脱敏和参数验证。
 - 协议字段变化必须同步更新测试、README 和 `SKILL.md`。
@@ -18,7 +20,7 @@
 
 ## 测试与完成定义
 
-默认测试不得调用真实 Grok 或消耗额度。优先覆盖 JSON/UTF-8 解析、UUID、参数生成、状态迁移、cursor、路径限制、输出截断和 thought 脱敏。任何代码修改完成前必须通过：
+默认测试不得调用真实 Grok 或消耗额度。优先覆盖 JSON/UTF-8 解析、UUID、参数生成、状态迁移、cursor、会话删除边界、Unix 权限、路径限制、输出截断和 thought 脱敏。任何代码修改完成前必须通过：
 
 ```text
 cargo fmt --check
@@ -28,6 +30,8 @@ cargo build --release
 ```
 
 同时确认 Release workflow 覆盖 Windows ARM64/x86_64、macOS ARM64、Linux ARM64/x86_64，并将根 `SKILL.md`、`agents/` 与五个二进制组装为 `grok-build/` 顶层目录的 ZIP。
+
+`.github/workflows/ci.yml` 必须在 `main` 与 Pull Request 上运行上述四项检查；`.github/workflows/release.yml` 仅由 `v*` Tag 构建并发布五平台 ZIP。
 
 ## Commit、Tag 与 Release
 
