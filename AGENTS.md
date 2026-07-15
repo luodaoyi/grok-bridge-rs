@@ -2,7 +2,7 @@
 
 ## 项目结构与定位
 
-本仓库构建 Windows x86_64 `grok-build` Agent Skill。`src/main.rs` 提供 CLI；`transport.rs` 负责自动启动和 Windows Named Pipe NDJSON；`server.rs` 分发 RPC；`session.rs` 持有 Grok ConPTY 与有界终端状态；`protocol.rs` 定义 JSON 请求和响应；`terminal_gui.rs` 实现 egui 真实终端；`gui_fonts.rs` 发现并验证 CJK fallback 字体。根 `SKILL.md` 是 Agent 工作流，`.github/workflows/` 负责 CI 和 Release。
+本仓库构建跨平台 `grok-build` Agent Skill。`src/main.rs` 提供 CLI；`transport.rs` 负责自动启动和本地 IPC；`server.rs` 分发 RPC；`session.rs` 持有 Grok PTY 与有界终端状态；`protocol.rs` 定义 JSON 请求和响应；`terminal_gui.rs` 实现 egui 真实终端；`gui_fonts.rs` 发现并验证 CJK fallback 字体。根 `SKILL.md` 是 Agent 工作流，`.github/workflows/` 负责 CI 和 Release。
 
 保持 Orca 风格本地 Runtime，不扩展为网络服务、数据库、Git/worktree 管理器、通用 Agent 平台或多 provider 抽象。
 
@@ -37,12 +37,17 @@ cargo build --release
 
 提交沿用 `feat:`、`fix:`、`docs:`、`chore:` 等前缀，并说明修改、原因、行为变化和排查线索。PR 应列出范围、风险、验证命令及 Named Pipe/ConPTY/JSON/GUI 兼容性影响。
 
-Release 只构建 Windows x86_64。ZIP 顶层必须是 `grok-build/`，且仅包含：
+Release 在 Windows x86_64/ARM64、Linux x86_64/ARM64 和 macOS Intel/Apple Silicon 原生 runner 上构建。ZIP 顶层必须是 `grok-build/`，且包含：
 
 ```text
 SKILL.md
 agents/openai.yaml
 bin/windows-x86_64/grok-bridge.exe
+bin/windows-arm64/grok-bridge.exe
+bin/linux-x86_64/grok-bridge
+bin/linux-arm64/grok-bridge
+bin/macos-x86_64/grok-bridge
+bin/macos-arm64/grok-bridge
 ```
 
 不要自动 commit、push、创建 Tag 或发布 Release。

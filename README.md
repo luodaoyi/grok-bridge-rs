@@ -1,6 +1,6 @@
 # grok-build Local Runtime Skill
 
-`grok-build` v0.4.0 是一个可直接解压使用的跨平台 Agent Skill。Codex 通过随包发布的原生 `grok-bridge` 调用本机 Grok Runtime；不需要 Python、MCP、安装脚本或额外服务。
+`grok-build` v0.4.1 是一个可直接解压使用的跨平台 Agent Skill。Codex 通过随包发布的原生 `grok-bridge` 调用本机 Grok Runtime；不需要 Python、MCP、安装脚本或额外服务。
 
 Runtime 维护每用户单例 Server 和持久 PTY 会话。CLI 通过本地 IPC 交换有界 NDJSON：Windows 使用 Named Pipe，Linux 使用抽象 Unix Socket，macOS 使用 `/tmp` 下的 Unix Socket。Server 持有 Grok CLI、会话状态和终端输出；RPC 命令向 STDOUT 返回一行 JSON，`terminal` 打开单会话 egui 终端，内置 localhost WebUI 则集中查看和关闭会话。
 
@@ -33,19 +33,19 @@ Linux GUI 使用 X11 后端。构建机需要 eframe 所需的 XCB/XKB 开发库
 
 ## 安装
 
-从 GitHub Releases 下载 `grok-build-skill-v0.4.0.zip` 和对应 `.sha256`。ZIP 同时包含六个平台的原生二进制，解压一次即可保留统一 Skill 目录。
+从 GitHub Releases 下载 `grok-build-skill-v0.4.1.zip` 和对应 `.sha256`。ZIP 同时包含六个平台的原生二进制，解压一次即可保留统一 Skill 目录。
 
 Windows PowerShell：
 
 ```powershell
-Expand-Archive .\grok-build-skill-v0.4.0.zip "$env:USERPROFILE\.agents\skills" -Force
+Expand-Archive .\grok-build-skill-v0.4.1.zip "$env:USERPROFILE\.agents\skills" -Force
 $bridge = "$env:USERPROFILE\.agents\skills\grok-build\bin\windows-x86_64\grok-bridge.exe"
 ```
 
 Linux/macOS：
 
 ```sh
-unzip grok-build-skill-v0.4.0.zip -d "$HOME/.agents/skills"
+unzip grok-build-skill-v0.4.1.zip -d "$HOME/.agents/skills"
 bridge="$HOME/.agents/skills/grok-build/bin/linux-x86_64/grok-bridge"
 ```
 
