@@ -1,5 +1,7 @@
 # grok-build Local Runtime Skill
 
+[Linux DO 社区](https://linux.do/)
+
 `grok-build` v0.6.0 是一个可直接解压使用的跨平台 Agent Skill。Codex 通过随包发布的原生 `grok-bridge` 调用本机 Grok Runtime；不需要 Python、MCP、安装脚本或额外服务。
 
 Runtime 维护每用户单例 Server 和持久 PTY 会话。CLI 通过本地 IPC 交换有界 NDJSON：Windows 使用 Named Pipe，Linux 使用抽象 Unix Socket，macOS 使用 `/tmp` 下的 Unix Socket。Server 持有 Grok CLI、会话状态和终端输出；RPC 命令向 STDOUT 返回一行 JSON，`terminal` 打开单会话 egui 终端，编译进二进制的 React + Tailwind localhost WebUI 则集中查看和关闭会话。
