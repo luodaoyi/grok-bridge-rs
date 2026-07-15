@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 - 2026-07-15
+
+- Redesigned the localhost WebUI as a denser session-management view with Codex owner summaries, persistent collapsible groups, live counts, stable terminal scroll positions, and responsive controls.
+- Added managed Grok lifecycle Hooks that report working, waiting, tool, failure, and turn-complete events through the existing local Runtime IPC and public Session JSON without changing PTY byte cursors.
+- Added `hooks install|status|uninstall`; the managed global Hook config is idempotent, preserves unrelated entries, drains stdin on every path, and fails open when the Runtime is unavailable.
+- Fixed Windows Hook launch reliability with direct slash-normalized commands and an encoded PowerShell fallback for paths containing spaces, Unicode, or shell-sensitive characters.
+- Assigned every Grok process a provider UUID through `--session-id`, routed Hook events to the exact Bridge session, and removed the mapping when that session closes.
+
 ## 0.4.1 - 2026-07-15
 
 - Added one-click WebUI cleanup for all Grok sessions grouped under one Codex conversation title, while leaving every other Codex group untouched.

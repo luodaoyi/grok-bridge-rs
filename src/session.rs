@@ -18,8 +18,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::protocol::{
-    MAX_WRITE_BYTES, ReadResult, SessionPhase, SessionState, WaitCondition, WaitResult,
-    validate_owner, validate_terminal_size,
+    HookActivity, HookEvent, HookEventKind, MAX_WRITE_BYTES, ReadResult, SessionPhase,
+    SessionState, WaitCondition, WaitResult, validate_owner, validate_terminal_size,
 };
 
 const INITIAL_COLS: u16 = 120;
@@ -30,6 +30,7 @@ const MAX_READ_BYTES: usize = 64 * 1024;
 const WRITER_QUEUE_CAPACITY: usize = 64;
 const QUIET_IDLE_MILLISECONDS: u64 = 3_000;
 const PROCESS_TERMINATE_TIMEOUT_MS: u32 = 5_000;
+const PROVIDER_SESSION_UUID_BYTES: usize = 16;
 
 pub(crate) struct SessionHost {
     registry: Mutex<SessionRegistry>,
@@ -45,6 +46,23 @@ pub(crate) struct CloseOwnerResult {
 struct SessionRegistry {
     accepting: bool,
     sessions: HashMap<String, Arc<Session>>,
+    provider_sessions: HashMap<String, String>,
+}
+
+impl SessionRegistry {
+    fn remove_session(&mut self, handle: &str, session: &Arc<Session>) -> bool {
+        if !self
+            .sessions
+            .get(handle)
+            .is_some_and(|current| Arc::ptr_eq(current, session))
+        {
+            return false;
+        }
+        self.sessions.remove(handle);
+        self.provider_sessions
+            .retain(|_, mapped_handle| mapped_handle != handle);
+        true
+    }
 }
 
 impl SessionHost {
@@ -53,6 +71,7 @@ impl SessionHost {
             registry: Mutex::new(SessionRegistry {
                 accepting: true,
                 sessions: HashMap::new(),
+                provider_sessions: HashMap::new(),
             }),
             next_id: AtomicU64::new(1),
         }
@@ -79,8 +98,16 @@ impl SessionHost {
             bail!("runtime server is stopping and no longer accepts new sessions");
         }
         let handle = self.next_handle();
+        let provider_session_id = generate_provider_session_id()?;
+        if registry
+            .provider_sessions
+            .contains_key(&provider_session_id)
+        {
+            bail!("generated a duplicate Grok provider session ID");
+        }
         let session = Session::spawn(
             handle.clone(),
+            &provider_session_id,
             LaunchConfig {
                 grok_bin: env::var_os("GROK_BIN").unwrap_or_else(default_grok_bin),
                 cwd,
@@ -91,7 +118,10 @@ impl SessionHost {
             },
         )?;
         let state = session.state()?;
-        registry.sessions.insert(handle, session);
+        registry.sessions.insert(handle.clone(), session);
+        registry
+            .provider_sessions
+            .insert(provider_session_id, handle);
         Ok(state)
     }
 
@@ -107,6 +137,10 @@ impl SessionHost {
             .collect::<Result<Vec<_>>>()?;
         states.sort_by_key(|state| state.created_at_ms);
         Ok(states)
+    }
+
+    pub(crate) fn list_web(&self) -> Result<Vec<SessionState>> {
+        self.list()
     }
 
     pub(crate) fn show(&self, handle: &str) -> Result<SessionState> {
@@ -150,6 +184,28 @@ impl SessionHost {
         self.get(handle)?.wait(condition, timeout_ms)
     }
 
+    pub(crate) fn apply_hook_event(
+        &self,
+        provider_session_id: &str,
+        event: HookEvent,
+    ) -> Result<bool> {
+        let session = {
+            let registry = self
+                .registry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
+            let Some(handle) = registry.provider_sessions.get(provider_session_id) else {
+                return Ok(false);
+            };
+            let Some(session) = registry.sessions.get(handle) else {
+                return Ok(false);
+            };
+            Arc::clone(session)
+        };
+        session.apply_hook_event(event)?;
+        Ok(true)
+    }
+
     pub(crate) fn close(&self, handle: &str) -> Result<bool> {
         let session = {
             let registry = self
@@ -166,13 +222,7 @@ impl SessionHost {
             .registry
             .lock()
             .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
-        if registry
-            .sessions
-            .get(handle)
-            .is_some_and(|current| Arc::ptr_eq(current, &session))
-        {
-            registry.sessions.remove(handle);
-        }
+        registry.remove_session(handle, &session);
         Ok(true)
     }
 
@@ -203,13 +253,7 @@ impl SessionHost {
                         .registry
                         .lock()
                         .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
-                    if registry
-                        .sessions
-                        .get(&handle)
-                        .is_some_and(|current| Arc::ptr_eq(current, &session))
-                    {
-                        registry.sessions.remove(&handle);
-                    }
+                    registry.remove_session(&handle, &session);
                 }
                 Err(error) => failures.push(format!("{handle}: {error:#}")),
             }
@@ -243,13 +287,7 @@ impl SessionHost {
                         .registry
                         .lock()
                         .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
-                    if registry
-                        .sessions
-                        .get(&handle)
-                        .is_some_and(|current| Arc::ptr_eq(current, &session))
-                    {
-                        registry.sessions.remove(&handle);
-                    }
+                    registry.remove_session(&handle, &session);
                 }
                 Err(error) => errors.push(format!("{handle}: {error:#}")),
             }
@@ -327,11 +365,35 @@ struct SessionInner {
     last_output_at_ms: Option<u64>,
     process_done: bool,
     reader_done: bool,
+    hook: HookState,
 }
 
 struct OutputChunk {
     start: u64,
     data: Vec<u8>,
+}
+
+#[derive(Default)]
+struct HookState {
+    activity: HookActivity,
+    last_event: Option<HookEventKind>,
+    last_event_at_ms: Option<u64>,
+    tool_name: Option<String>,
+    waiting_reason: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum HookEffect {
+    Reset,
+    Working {
+        tool_name: Option<String>,
+    },
+    Waiting {
+        tool_name: Option<String>,
+        reason: String,
+    },
+    Done,
+    RecordOnly,
 }
 
 #[derive(Default)]
@@ -383,7 +445,7 @@ impl Session {
             == Some(owner))
     }
 
-    fn spawn(handle: String, config: LaunchConfig) -> Result<Arc<Self>> {
+    fn spawn(handle: String, provider_session_id: &str, config: LaunchConfig) -> Result<Arc<Self>> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -401,7 +463,7 @@ impl Session {
             .master
             .take_writer()
             .context("failed to take the PTY writer")?;
-        let command = build_grok_command(&config);
+        let command = build_grok_command(&config, provider_session_id);
         let child = pair
             .slave
             .spawn_command(command)
@@ -439,6 +501,7 @@ impl Session {
                 last_output_at_ms: None,
                 process_done: false,
                 reader_done: false,
+                hook: HookState::default(),
             }),
             changed: Condvar::new(),
             writer_tx: Mutex::new(Some(writer_tx)),
@@ -460,6 +523,59 @@ impl Session {
             .lock()
             .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
         Ok(inner.to_state())
+    }
+
+    fn apply_hook_event(&self, event: HookEvent) -> Result<()> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        if phase_is_terminal(inner.phase) {
+            return Ok(());
+        }
+
+        if let Some(cwd) = event.cwd.as_deref() {
+            let hook_cwd = canonical_directory(Path::new(cwd))?;
+            let session_cwd = normalize_platform_path(PathBuf::from(&inner.cwd));
+            if hook_cwd != session_cwd {
+                bail!("hook working directory does not match the session");
+            }
+        }
+
+        match hook_effect(&event) {
+            HookEffect::Reset => {
+                inner.hook.activity = HookActivity::Unknown;
+                inner.hook.tool_name = None;
+                inner.hook.waiting_reason = None;
+            }
+            HookEffect::Working { tool_name } => {
+                inner.hook.activity = HookActivity::Working;
+                inner.hook.tool_name = tool_name;
+                inner.hook.waiting_reason = None;
+                inner.phase = SessionPhase::Running;
+            }
+            HookEffect::Waiting { tool_name, reason } => {
+                inner.hook.activity = HookActivity::Waiting;
+                inner.hook.tool_name = tool_name;
+                inner.hook.waiting_reason = Some(reason);
+                inner.phase = SessionPhase::Running;
+            }
+            HookEffect::Done => {
+                inner.hook.activity = HookActivity::Done;
+                inner.hook.tool_name = None;
+                inner.hook.waiting_reason = None;
+                inner.phase = SessionPhase::Idle;
+            }
+            HookEffect::RecordOnly => {}
+        }
+
+        let now = now_millis();
+        inner.hook.last_event = Some(event.kind);
+        inner.hook.last_event_at_ms = Some(now);
+        inner.updated_at_ms = now;
+        drop(inner);
+        self.changed.notify_all();
+        Ok(())
     }
 
     fn read(&self, cursor: u64, limit: usize, wait_ms: u64) -> Result<ReadResult> {
@@ -572,6 +688,9 @@ impl Session {
             Ok(()) => {
                 if starts_turn {
                     inner.phase = SessionPhase::Running;
+                    inner.hook.activity = HookActivity::Working;
+                    inner.hook.tool_name = None;
+                    inner.hook.waiting_reason = None;
                 }
                 inner.updated_at_ms = now_millis();
                 drop(writer_guard);
@@ -630,6 +749,14 @@ impl Session {
             if condition == WaitCondition::TuiIdle {
                 let screen = inner.parser.screen().contents();
                 if let Some(reason) = blocked_reason(&screen) {
+                    return Ok(inner.wait_result(condition, false, false, Some(reason)));
+                }
+                if inner.hook.activity == HookActivity::Waiting {
+                    let reason = inner
+                        .hook
+                        .waiting_reason
+                        .as_deref()
+                        .unwrap_or("grok-hook-waiting");
                     return Ok(inner.wait_result(condition, false, false, Some(reason)));
                 }
             }
@@ -698,6 +825,7 @@ impl Session {
             inner.phase,
             inner.title.as_deref(),
             title_updated,
+            inner.hook.activity,
             inner.process_done,
             inner.error.is_some(),
             self.shutdown.load(Ordering::Acquire),
@@ -895,6 +1023,11 @@ impl SessionInner {
             screen_ansi_base64: BASE64.encode(screen.contents_formatted()),
             last_cursor: self.next_cursor,
             last_output_at_ms: self.last_output_at_ms,
+            activity: self.hook.activity,
+            hook_event: self.hook.last_event,
+            hook_at_ms: self.hook.last_event_at_ms,
+            tool_name: self.hook.tool_name.clone(),
+            waiting_reason: self.hook.waiting_reason.clone(),
         }
     }
 
@@ -917,11 +1050,130 @@ impl SessionInner {
     }
 }
 
-fn build_grok_command(config: &LaunchConfig) -> CommandBuilder {
+fn generate_provider_session_id() -> Result<String> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut bytes = [0_u8; PROVIDER_SESSION_UUID_BYTES];
+    getrandom::fill(&mut bytes).context("failed to generate the Grok provider session ID")?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    let mut session_id = String::with_capacity(36);
+    for (index, byte) in bytes.into_iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            session_id.push('-');
+        }
+        session_id.push(HEX[usize::from(byte >> 4)] as char);
+        session_id.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    Ok(session_id)
+}
+
+fn hook_effect(event: &HookEvent) -> HookEffect {
+    match event.kind {
+        HookEventKind::SessionStart => HookEffect::Reset,
+        HookEventKind::UserPromptSubmit
+        | HookEventKind::PostToolUse
+        | HookEventKind::PostToolUseFailure => HookEffect::Working {
+            tool_name: event.tool_name.clone(),
+        },
+        HookEventKind::PreToolUse if is_ask_user_question(event.tool_name.as_deref()) => {
+            HookEffect::Waiting {
+                tool_name: event.tool_name.clone(),
+                reason: event
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "ask_user_question".to_owned()),
+            }
+        }
+        HookEventKind::PreToolUse => HookEffect::Working {
+            tool_name: event.tool_name.clone(),
+        },
+        HookEventKind::Stop | HookEventKind::StopFailure | HookEventKind::SessionEnd => {
+            HookEffect::Done
+        }
+        HookEventKind::Notification => notification_effect(event),
+    }
+}
+
+fn is_ask_user_question(tool_name: Option<&str>) -> bool {
+    tool_name.is_some_and(|name| name.eq_ignore_ascii_case("ask_user_question"))
+}
+
+fn notification_effect(event: &HookEvent) -> HookEffect {
+    let notification_type = event
+        .notification_type
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if notification_type == "permission_prompt" {
+        return HookEffect::RecordOnly;
+    }
+
+    let level = event
+        .level
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let message = event.message.as_deref().unwrap_or_default();
+    let lower_message = message.to_ascii_lowercase();
+    let waiting = [
+        "permission",
+        "question",
+        "ask_user_question",
+        "elicitation",
+        "elicitation_dialog",
+    ]
+    .iter()
+    .any(|value| notification_type == *value || level == *value)
+        || ["permission", "approval", "approve", "question"]
+            .iter()
+            .any(|value| lower_message.contains(value))
+        || ["权限", "授权", "批准", "问题", "确认"]
+            .iter()
+            .any(|value| message.contains(value));
+    if waiting {
+        let reason = event
+            .message
+            .clone()
+            .or_else(|| event.notification_type.clone())
+            .unwrap_or_else(|| "grok-hook-waiting".to_owned());
+        return HookEffect::Waiting {
+            tool_name: event.tool_name.clone(),
+            reason,
+        };
+    }
+
+    let done = [
+        "idle_prompt",
+        "input_prompt",
+        "input_required",
+        "user_input",
+        "waiting_for_input",
+    ]
+    .iter()
+    .any(|value| notification_type == *value || level == *value)
+        || ["waiting for input", "waiting for your input"]
+            .iter()
+            .any(|value| lower_message.contains(value))
+        || ["请输入", "等待输入", "需要输入"]
+            .iter()
+            .any(|value| message.contains(value));
+    if done {
+        HookEffect::Done
+    } else {
+        HookEffect::RecordOnly
+    }
+}
+
+fn build_grok_command(config: &LaunchConfig, provider_session_id: &str) -> CommandBuilder {
     let mut command = CommandBuilder::new(&config.grok_bin);
     command.cwd(config.cwd.as_os_str());
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    command.arg("--session-id");
+    command.arg(provider_session_id);
     if config.always_approve {
         command.arg("--always-approve");
     }
@@ -1026,15 +1278,18 @@ fn phase_after_output(
     current: SessionPhase,
     title: Option<&str>,
     title_updated: bool,
+    hook_activity: HookActivity,
     process_done: bool,
     failed: bool,
     shutdown: bool,
 ) -> SessionPhase {
     if phase_is_terminal(current) || process_done || failed || shutdown {
         current
-    } else if title_updated {
-        phase_from_title(title).unwrap_or(SessionPhase::Running)
-    } else if current == SessionPhase::Starting {
+    } else if title_updated && let Some(phase) = phase_from_title(title) {
+        phase
+    } else if hook_activity == HookActivity::Done {
+        SessionPhase::Idle
+    } else if hook_activity == HookActivity::Waiting || current == SessionPhase::Starting {
         SessionPhase::Running
     } else {
         current
@@ -1068,7 +1323,14 @@ fn wait_satisfied(inner: &mut SessionInner, condition: WaitCondition) -> bool {
                     .unwrap_or(inner.updated_at_ms)
                     .max(inner.updated_at_ms),
             ) >= QUIET_IDLE_MILLISECONDS;
-            if inner.phase == SessionPhase::Running && inner.title.is_none() && quiet {
+            if inner.phase == SessionPhase::Running
+                && inner.title.is_none()
+                && matches!(
+                    inner.hook.activity,
+                    HookActivity::Unknown | HookActivity::Working
+                )
+                && quiet
+            {
                 inner.phase = SessionPhase::Idle;
                 inner.updated_at_ms = now_millis();
                 return true;
@@ -1224,6 +1486,73 @@ fn now_millis() -> u64 {
 mod tests {
     use super::*;
 
+    const TEST_PROVIDER_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    fn hook_event(kind: HookEventKind) -> HookEvent {
+        HookEvent {
+            kind,
+            cwd: None,
+            tool_name: None,
+            message: None,
+            notification_type: None,
+            level: None,
+        }
+    }
+
+    fn test_session(phase: SessionPhase) -> Session {
+        let cwd = canonical_directory(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let (writer_tx, _writer_rx) = sync_channel(1);
+        let terminal = phase_is_terminal(phase);
+        Session {
+            inner: Mutex::new(SessionInner {
+                session: "gbt-test".to_owned(),
+                owner: Some("test-owner".to_owned()),
+                phase,
+                cwd: cwd.to_string_lossy().into_owned(),
+                model: Some("grok-test".to_owned()),
+                always_approve: false,
+                process_id: (!terminal).then_some(42),
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                exit_code: None,
+                error: None,
+                title: None,
+                parser: vt100::Parser::new_with_callbacks(
+                    INITIAL_ROWS,
+                    INITIAL_COLS,
+                    SCROLLBACK_ROWS,
+                    TitleCallbacks::default(),
+                ),
+                chunks: VecDeque::new(),
+                transcript_bytes: 0,
+                next_cursor: 0,
+                last_output_at_ms: None,
+                process_done: terminal,
+                reader_done: terminal,
+                hook: HookState::default(),
+            }),
+            changed: Condvar::new(),
+            writer_tx: Mutex::new(Some(writer_tx)),
+            master: Mutex::new(None),
+            killer: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+            terminating: AtomicBool::new(false),
+        }
+    }
+
+    fn test_host(provider_session_id: &str, phase: SessionPhase) -> SessionHost {
+        let session = Arc::new(test_session(phase));
+        let handle = session.state().unwrap().session;
+        SessionHost {
+            registry: Mutex::new(SessionRegistry {
+                accepting: true,
+                sessions: HashMap::from([(handle.clone(), session)]),
+                provider_sessions: HashMap::from([(provider_session_id.to_owned(), handle)]),
+            }),
+            next_id: AtomicU64::new(1),
+        }
+    }
+
     #[test]
     fn detects_grok_working_and_idle_titles() {
         assert_eq!(
@@ -1248,7 +1577,9 @@ mod tests {
             owner: None,
             always_approve: true,
         };
-        let command = build_grok_command(&config);
+        let command = build_grok_command(&config, TEST_PROVIDER_SESSION_ID);
+        assert_eq!(command.get_env("GROK_BRIDGE_SESSION"), None);
+        assert_eq!(command.get_env("GROK_BRIDGE_HOOK_TOKEN"), None);
         let argv = command
             .get_argv()
             .iter()
@@ -1258,6 +1589,8 @@ mod tests {
             argv,
             [
                 "grok.exe",
+                "--session-id",
+                TEST_PROVIDER_SESSION_ID,
                 "--always-approve",
                 "--model",
                 "grok-4",
@@ -1285,9 +1618,265 @@ mod tests {
     }
 
     #[test]
+    fn generates_random_uuid_v4_provider_session_ids() {
+        let first = generate_provider_session_id().unwrap();
+        let second = generate_provider_session_id().unwrap();
+        assert_eq!(first.len(), 36);
+        assert_eq!(&first[8..9], "-");
+        assert_eq!(&first[13..14], "-");
+        assert_eq!(&first[18..19], "-");
+        assert_eq!(&first[23..24], "-");
+        assert_eq!(&first[14..15], "4");
+        assert!(matches!(&first[19..20], "8" | "9" | "a" | "b"));
+        assert!(
+            first
+                .bytes()
+                .all(|byte| { byte.is_ascii_digit() || matches!(byte, b'a'..=b'f' | b'-') })
+        );
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn maps_hook_lifecycle_and_tool_events_to_activity() {
+        let mut event = hook_event(HookEventKind::PreToolUse);
+        event.tool_name = Some("read_file".to_owned());
+        assert_eq!(
+            hook_effect(&event),
+            HookEffect::Working {
+                tool_name: Some("read_file".to_owned())
+            }
+        );
+
+        event.tool_name = Some("ASK_USER_QUESTION".to_owned());
+        event.message = Some("请选择目标".to_owned());
+        assert_eq!(
+            hook_effect(&event),
+            HookEffect::Waiting {
+                tool_name: Some("ASK_USER_QUESTION".to_owned()),
+                reason: "请选择目标".to_owned(),
+            }
+        );
+
+        for kind in [
+            HookEventKind::UserPromptSubmit,
+            HookEventKind::PostToolUse,
+            HookEventKind::PostToolUseFailure,
+        ] {
+            assert!(matches!(
+                hook_effect(&hook_event(kind)),
+                HookEffect::Working { .. }
+            ));
+        }
+        for kind in [
+            HookEventKind::Stop,
+            HookEventKind::StopFailure,
+            HookEventKind::SessionEnd,
+        ] {
+            assert_eq!(hook_effect(&hook_event(kind)), HookEffect::Done);
+        }
+        assert_eq!(
+            hook_effect(&hook_event(HookEventKind::SessionStart)),
+            HookEffect::Reset
+        );
+    }
+
+    #[test]
+    fn classifies_notification_events_without_treating_permission_prompt_as_blocked() {
+        let mut event = hook_event(HookEventKind::Notification);
+        event.notification_type = Some("permission_prompt".to_owned());
+        event.message = Some("Approval required".to_owned());
+        assert_eq!(hook_effect(&event), HookEffect::RecordOnly);
+
+        event.notification_type = Some("question".to_owned());
+        event.message = Some("请选择".to_owned());
+        assert_eq!(
+            hook_effect(&event),
+            HookEffect::Waiting {
+                tool_name: None,
+                reason: "请选择".to_owned(),
+            }
+        );
+
+        event.notification_type = Some("input_required".to_owned());
+        event.message = None;
+        assert_eq!(hook_effect(&event), HookEffect::Done);
+
+        event.notification_type = Some("status".to_owned());
+        event.level = Some("info".to_owned());
+        assert_eq!(hook_effect(&event), HookEffect::RecordOnly);
+    }
+
+    #[test]
+    fn applies_hook_state_without_advancing_the_read_cursor() {
+        let session = test_session(SessionPhase::Running);
+        let cwd = session.state().unwrap().cwd;
+        let mut event = hook_event(HookEventKind::PreToolUse);
+        event.cwd = Some(cwd);
+        event.tool_name = Some("ask_user_question".to_owned());
+        event.message = Some("需要选择".to_owned());
+        session.apply_hook_event(event).unwrap();
+
+        let web = session.state().unwrap();
+        assert_eq!(web.phase, SessionPhase::Running);
+        assert_eq!(web.activity, HookActivity::Waiting);
+        assert_eq!(web.tool_name.as_deref(), Some("ask_user_question"));
+        assert_eq!(web.waiting_reason.as_deref(), Some("需要选择"));
+        assert_eq!(web.last_cursor, 0);
+        let read = session.read(0, 1, 0).unwrap();
+        assert_eq!(read.cursor, 0);
+        assert_eq!(read.next_cursor, 0);
+        let wait = session.wait(WaitCondition::TuiIdle, 0).unwrap();
+        assert!(!wait.satisfied);
+        assert!(!wait.timed_out);
+        assert_eq!(wait.blocked_reason.as_deref(), Some("需要选择"));
+
+        let serialized = serde_json::to_value(web).unwrap();
+        assert_eq!(serialized["session"], "gbt-test");
+        assert_eq!(serialized["activity"], "waiting");
+        assert!(serialized.get("hook_token").is_none());
+        assert!(serialized.get("provider_session_id").is_none());
+    }
+
+    #[test]
+    fn ignores_late_terminal_hook_events() {
+        let terminal = test_session(SessionPhase::Exited);
+        let mut late = hook_event(HookEventKind::PreToolUse);
+        late.cwd = Some("path-that-does-not-exist".to_owned());
+        late.tool_name = Some("ask_user_question".to_owned());
+        terminal.apply_hook_event(late).unwrap();
+        let web = terminal.state().unwrap();
+        assert_eq!(web.phase, SessionPhase::Exited);
+        assert_eq!(web.activity, HookActivity::Unknown);
+        assert_eq!(web.hook_event, None);
+    }
+
+    #[test]
+    fn routes_hook_events_by_provider_session_id() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let cwd = host.show("gbt-test").unwrap().cwd;
+        let mut event = hook_event(HookEventKind::PreToolUse);
+        event.cwd = Some(cwd);
+        event.tool_name = Some("ask_user_question".to_owned());
+        event.message = Some("需要选择".to_owned());
+
+        assert!(
+            host.apply_hook_event(TEST_PROVIDER_SESSION_ID, event)
+                .unwrap()
+        );
+        let web = host.list_web().unwrap().pop().unwrap();
+        assert_eq!(web.activity, HookActivity::Waiting);
+        assert_eq!(web.tool_name.as_deref(), Some("ask_user_question"));
+        assert_eq!(web.waiting_reason.as_deref(), Some("需要选择"));
+    }
+
+    #[test]
+    fn returns_false_for_unknown_provider_sessions() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        assert!(
+            !host
+                .apply_hook_event(
+                    "00000000-0000-4000-8000-000000000000",
+                    hook_event(HookEventKind::Stop)
+                )
+                .unwrap()
+        );
+        assert_eq!(host.show("gbt-test").unwrap().phase, SessionPhase::Running);
+    }
+
+    #[test]
+    fn close_removes_the_provider_session_index() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Exited);
+        assert!(host.close("gbt-test").unwrap());
+        assert!(
+            !host
+                .apply_hook_event(TEST_PROVIDER_SESSION_ID, hook_event(HookEventKind::Stop))
+                .unwrap()
+        );
+        let registry = host.registry.lock().unwrap();
+        assert!(registry.sessions.is_empty());
+        assert!(registry.provider_sessions.is_empty());
+    }
+
+    #[test]
+    fn hook_done_and_waiting_survive_output_without_an_explicit_grok_title() {
+        assert_eq!(
+            phase_after_output(
+                SessionPhase::Running,
+                None,
+                false,
+                HookActivity::Done,
+                false,
+                false,
+                false,
+            ),
+            SessionPhase::Idle
+        );
+        assert_eq!(
+            phase_after_output(
+                SessionPhase::Running,
+                None,
+                false,
+                HookActivity::Waiting,
+                false,
+                false,
+                false,
+            ),
+            SessionPhase::Running
+        );
+        assert_eq!(
+            phase_after_output(
+                SessionPhase::Idle,
+                Some("⠋ - Waiting for response… - grok"),
+                true,
+                HookActivity::Done,
+                false,
+                false,
+                false,
+            ),
+            SessionPhase::Running
+        );
+        assert_eq!(
+            phase_after_output(
+                SessionPhase::Running,
+                Some("grok"),
+                true,
+                HookActivity::Waiting,
+                false,
+                false,
+                false,
+            ),
+            SessionPhase::Idle
+        );
+    }
+
+    #[test]
+    fn quiet_fallback_recovers_from_a_missing_completion_hook() {
+        let session = test_session(SessionPhase::Running);
+        let mut inner = session.inner.lock().unwrap();
+        inner.updated_at_ms = now_millis().saturating_sub(QUIET_IDLE_MILLISECONDS + 1);
+        inner.hook.activity = HookActivity::Working;
+        assert!(wait_satisfied(&mut inner, WaitCondition::TuiIdle));
+        assert_eq!(inner.phase, SessionPhase::Idle);
+
+        inner.phase = SessionPhase::Running;
+        inner.updated_at_ms = now_millis().saturating_sub(QUIET_IDLE_MILLISECONDS + 1);
+        inner.hook.activity = HookActivity::Waiting;
+        assert!(!wait_satisfied(&mut inner, WaitCondition::TuiIdle));
+        assert_eq!(inner.phase, SessionPhase::Running);
+    }
+
+    #[test]
     fn late_output_does_not_revive_a_finished_process() {
         assert_eq!(
-            phase_after_output(SessionPhase::Exited, Some("grok"), true, true, false, false),
+            phase_after_output(
+                SessionPhase::Exited,
+                Some("grok"),
+                true,
+                HookActivity::Done,
+                true,
+                false,
+                false,
+            ),
             SessionPhase::Exited
         );
         assert_eq!(
@@ -1295,6 +1884,7 @@ mod tests {
                 SessionPhase::Running,
                 Some("grok"),
                 false,
+                HookActivity::Unknown,
                 false,
                 false,
                 false
@@ -1306,6 +1896,7 @@ mod tests {
                 SessionPhase::Running,
                 Some("grok"),
                 true,
+                HookActivity::Unknown,
                 false,
                 false,
                 false

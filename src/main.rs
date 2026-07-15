@@ -1,4 +1,5 @@
 mod gui_fonts;
+mod hooks;
 mod protocol;
 mod server;
 mod session;
@@ -15,8 +16,10 @@ mod app {
     };
 
     use anyhow::{Context, Result, bail};
+    use serde::Serialize;
 
     use crate::{
+        hooks,
         protocol::{Request, ResponseEnvelope, ResponseResult, WaitCondition},
         server, session, terminal_gui, transport,
     };
@@ -33,11 +36,19 @@ mod app {
     enum Action {
         Rpc { request: Request, auto_start: bool },
         Terminal(TerminalOptions),
+        Hooks(HooksAction),
         ServerUi,
         Doctor,
         Help,
         Version,
+        InternalHook,
         InternalServer,
+    }
+
+    enum HooksAction {
+        Install,
+        Status,
+        Uninstall,
     }
 
     pub(super) fn main() {
@@ -66,6 +77,15 @@ mod app {
                 terminal_gui::run(session)?;
                 Ok(0)
             }
+            Action::Hooks(action) => {
+                let status = match action {
+                    HooksAction::Install => hooks::install()?,
+                    HooksAction::Status => hooks::status()?,
+                    HooksAction::Uninstall => hooks::uninstall()?,
+                };
+                write_json(&status)?;
+                Ok(0)
+            }
             Action::ServerUi => server_ui(),
             Action::Doctor => doctor(),
             Action::Help => {
@@ -74,6 +94,10 @@ mod app {
             }
             Action::Version => {
                 println!("grok-bridge {}", env!("CARGO_PKG_VERSION"));
+                Ok(0)
+            }
+            Action::InternalHook => {
+                hooks::run_ingress_fail_open();
                 Ok(0)
             }
             Action::InternalServer => {
@@ -88,10 +112,15 @@ mod app {
             return Ok(Action::Help);
         };
         match command {
+            "__hook" => {
+                ensure_no_arguments(&arguments[1..])?;
+                Ok(Action::InternalHook)
+            }
             "__server" => {
                 ensure_no_arguments(&arguments[1..])?;
                 Ok(Action::InternalServer)
             }
+            "hooks" => parse_hooks(&arguments[1..]),
             "server" => parse_server(&arguments[1..]),
             "create" => parse_create(&arguments[1..]),
             "list" => {
@@ -136,6 +165,20 @@ mod app {
             }
             other => bail!("unknown command: {other}"),
         }
+    }
+
+    fn parse_hooks(arguments: &[OsString]) -> Result<Action> {
+        let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
+            bail!("hooks requires install, status, or uninstall");
+        };
+        ensure_no_arguments(&arguments[1..])?;
+        let action = match command {
+            "install" => HooksAction::Install,
+            "status" => HooksAction::Status,
+            "uninstall" => HooksAction::Uninstall,
+            other => bail!("unknown hooks command: {other}"),
+        };
+        Ok(Action::Hooks(action))
     }
 
     fn parse_server(arguments: &[OsString]) -> Result<Action> {
@@ -457,10 +500,10 @@ mod app {
         }
     }
 
-    fn write_json(response: &ResponseEnvelope) -> Result<()> {
+    fn write_json(value: &impl Serialize) -> Result<()> {
         let stdout = io::stdout();
         let mut output = stdout.lock();
-        serde_json::to_writer(&mut output, response).context("failed to write JSON response")?;
+        serde_json::to_writer(&mut output, value).context("failed to write JSON response")?;
         output
             .write_all(b"\n")
             .context("failed to finish JSON response")
@@ -491,7 +534,7 @@ mod app {
 
     fn print_help() {
         println!(
-            "grok-bridge {}\n\nUSAGE:\n  grok-bridge server start|status|stop|ui\n  grok-bridge create [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge list\n  grok-bridge show --session <handle>\n  grok-bridge read --session <handle> [--cursor <n>] [--limit <bytes>] [--wait-ms <n>]\n  grok-bridge send --session <handle> (--text <text> | --interrupt)\n  grok-bridge write --session <handle> --data-base64 <base64>\n  grok-bridge resize --session <handle> --cols <n> --rows <n>\n  grok-bridge wait --session <handle> --for tui-idle|exit [--timeout-ms <n>]\n  grok-bridge close --session <handle>\n  grok-bridge terminal --session <handle>\n  grok-bridge terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge doctor\n\n`server ui` starts the singleton Runtime and opens its localhost WebUI. `terminal --session` attaches to an existing persistent PTY session. Without `--session`, it creates a session and opens the terminal GUI. Closing either UI only detaches; only an explicit close action terminates Grok. RPC commands print one JSON response; interactive UI commands are exceptions. Every session command auto-starts one per-user Runtime Server when needed.",
+            "grok-bridge {}\n\nUSAGE:\n  grok-bridge hooks install|status|uninstall\n  grok-bridge server start|status|stop|ui\n  grok-bridge create [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge list\n  grok-bridge show --session <handle>\n  grok-bridge read --session <handle> [--cursor <n>] [--limit <bytes>] [--wait-ms <n>]\n  grok-bridge send --session <handle> (--text <text> | --interrupt)\n  grok-bridge write --session <handle> --data-base64 <base64>\n  grok-bridge resize --session <handle> --cols <n> --rows <n>\n  grok-bridge wait --session <handle> --for tui-idle|exit [--timeout-ms <n>]\n  grok-bridge close --session <handle>\n  grok-bridge terminal --session <handle>\n  grok-bridge terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge doctor\n\n`hooks install` adds the managed Grok lifecycle hooks used for accurate working, waiting, and idle status. `server ui` starts the singleton Runtime and opens its localhost WebUI. `terminal --session` attaches to an existing persistent PTY session. Without `--session`, it creates a session and opens the terminal GUI. Closing either UI only detaches; only an explicit close action terminates Grok. RPC commands print one JSON response; interactive UI commands are exceptions. Every session command auto-starts one per-user Runtime Server when needed.",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -535,6 +578,27 @@ mod app {
                     ..
                 } if input == "\u{3}"
             ));
+        }
+
+        #[test]
+        fn parses_hook_management_and_hidden_ingress_commands() {
+            assert!(matches!(
+                parse_args(vec!["hooks".into(), "install".into()]).unwrap(),
+                Action::Hooks(HooksAction::Install)
+            ));
+            assert!(matches!(
+                parse_args(vec!["hooks".into(), "status".into()]).unwrap(),
+                Action::Hooks(HooksAction::Status)
+            ));
+            assert!(matches!(
+                parse_args(vec!["hooks".into(), "uninstall".into()]).unwrap(),
+                Action::Hooks(HooksAction::Uninstall)
+            ));
+            assert!(matches!(
+                parse_args(vec!["__hook".into()]).unwrap(),
+                Action::InternalHook
+            ));
+            assert!(parse_args(vec!["__hook".into(), "extra".into()]).is_err());
         }
 
         #[test]

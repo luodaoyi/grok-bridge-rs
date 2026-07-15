@@ -21,7 +21,7 @@ Refer to the selected executable as `<bridge>` below. Do not download another wr
 ## Workflow
 
 1. Inspect the repository, current changes, constraints, and acceptance criteria.
-2. Run `<bridge> doctor` if Grok availability is uncertain.
+2. Run `<bridge> hooks install` before the first session and after replacing the bundled executable. The command is idempotent and updates only the managed entries in `$GROK_HOME/hooks/grok-bridge.json`, or the default `~/.grok/hooks/grok-bridge.json` when `GROK_HOME` is unset. Run `<bridge> doctor` if Grok availability is uncertain. `hooks status` always returns JSON, so inspect its `installed` field instead of relying only on the exit code.
 3. Create one focused session. Keep automatic approval disabled unless the repository and prompt are trusted.
 
 ```text
@@ -37,7 +37,7 @@ Before every `create`, summarize the current Codex conversation into a short, re
 <bridge> read --session <session> --cursor 0 --limit 4096 --wait-ms 5000
 ```
 
-If `blocked_reason` is present, inspect `show` and send the exact answer required by the visible prompt. Do not treat a blocked prompt as completion.
+Inspect the Session JSON fields `activity`, `hook_event`, `tool_name`, and `waiting_reason` after `create`, `list`, or `show`. If `blocked_reason` is present, inspect `show` and send the exact answer required by the visible prompt. Grok lifecycle Hooks report `ask_user_question` and other recognized interactive waits before terminal-title polling would; routine permission notifications remain record-only, so terminal prompt detection is still authoritative. Do not treat a blocked prompt as completion.
 
 5. Independently inspect `git status` and `git diff`, then run the repository's required checks. Runtime success or `tui-idle` is not proof that the task passed.
 6. Send focused follow-up evidence through the same PTY session, then repeat `wait`, `read`, and verification.
@@ -63,7 +63,7 @@ Use the built-in WebUI only when the user wants a browser overview or manual cle
 <bridge> server ui
 ```
 
-The command starts the singleton Runtime if needed and opens its WebUI in the default browser. The page groups Grok sessions by Codex conversation title and refreshes each terminal's current screen, phase, idle time, and working directory. After checking the visible terminals, close either one Grok process or every process in that Codex title group with its batch-close button; other groups remain running. Closing the browser tab does nothing to sessions.
+The command starts the singleton Runtime if needed and opens its WebUI in the default browser. The page summarizes working, waiting, and completed activity, groups Grok sessions by Codex conversation title, and keeps each group collapsible across automatic refreshes; use the expand-all and collapse-all controls when many Codex conversations are active. Each session card shows its terminal screen, most recent Hook, active tool, waiting reason, process ID, last-update age, and working directory. After checking the visible terminals, close either one Grok process or every process in that Codex title group with its batch-close button; other groups remain running. Closing the browser tab does nothing to sessions.
 
 The default address is `127.0.0.1:47653`. Keep `GROK_BRIDGE_WEB_ADDR` on a loopback address because the WebUI has no user authentication. If the port cannot be bound, JSON CLI and PTY sessions continue to work but `server ui` reports that the WebUI is unavailable.
 
@@ -79,6 +79,7 @@ Use `terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <label
 
 ## Command Rules
 
+- `hooks install|status|uninstall` manages the global Grok lifecycle Hook entries used to distinguish working, waiting, and completed turns. Install is idempotent; uninstall preserves unrelated hooks.
 - `server start|status|stop|ui` manages the per-user singleton Runtime and opens its localhost WebUI.
 - `create`, `list`, `show`, `read`, `send`, `write`, `resize`, `wait`, and `close` return JSON and start the Server when needed.
 - `read` uses byte cursors; `show` includes `rows`, `cols`, and `screen_ansi_base64` for terminal restoration.
@@ -86,4 +87,4 @@ Use `terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <label
 - `wait --for tui-idle` reports recognized prompts through `blocked_reason`; `wait --for exit` waits for process termination.
 - `terminal --session <handle>` attaches the GUI to an existing session. Without `--session`, it creates one first.
 
-Prefer JSON `create/read/wait/show/send` for Codex-driven work. Use `write` and `resize` only when exact terminal bytes or dimensions are required. The Server owns every Grok PTY and in-memory session; the terminal and WebUI are clients. Do not edit the same files concurrently with Grok, expose secrets in prompts, owner labels, or raw input, or assume sessions survive a Server restart. By default the Runtime resolves `grok.exe` on Windows and `grok` on Unix. Use `GROK_BIN` only for a trusted native executable, `GROK_BRIDGE_ALLOWED_ROOTS` to restrict accepted working directories, and `GROK_BRIDGE_WEB_ADDR` only to select a trusted loopback listener.
+Prefer JSON `create/read/wait/show/send` for Codex-driven work. Use `write` and `resize` only when exact terminal bytes or dimensions are required. The Server owns every Grok PTY and in-memory session; the terminal and WebUI are clients. Hooks are a fail-open observation channel and never replace PTY control or add bytes to `read`; a missing Hook must not be treated as task failure. Do not edit the same files concurrently with Grok, expose secrets in prompts, owner labels, or raw input, or assume sessions survive a Server restart. By default the Runtime resolves `grok.exe` on Windows and `grok` on Unix. Use `GROK_BIN` only for a trusted native executable, `GROK_BRIDGE_ALLOWED_ROOTS` to restrict accepted working directories, and `GROK_BRIDGE_WEB_ADDR` only to select a trusted loopback listener.

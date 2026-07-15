@@ -8,6 +8,10 @@ pub(crate) const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_WRITE_BYTES: usize = 64 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_OWNER_BYTES: usize = 128;
+const PROVIDER_SESSION_ID_BYTES: usize = 36;
+const MAX_HOOK_CWD_BYTES: usize = 4096;
+const MAX_HOOK_SHORT_TEXT_BYTES: usize = 128;
+const MAX_HOOK_MESSAGE_BYTES: usize = 1024;
 const MAX_READ_LIMIT: u32 = 65_536;
 const MIN_TERMINAL_COLS: u16 = 20;
 const MAX_TERMINAL_COLS: u16 = 500;
@@ -71,6 +75,45 @@ pub(crate) enum Request {
     Close {
         session: String,
     },
+    HookEvent {
+        provider_session_id: String,
+        event: HookEvent,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HookEventKind {
+    SessionStart,
+    UserPromptSubmit,
+    Stop,
+    StopFailure,
+    SessionEnd,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    Notification,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HookActivity {
+    #[default]
+    Unknown,
+    Working,
+    Waiting,
+    Done,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HookEvent {
+    pub(crate) kind: HookEventKind,
+    pub(crate) cwd: Option<String>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) message: Option<String>,
+    pub(crate) notification_type: Option<String>,
+    pub(crate) level: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -185,6 +228,12 @@ pub(crate) struct SessionState {
     pub(crate) updated_at_ms: u64,
     pub(crate) exit_code: Option<u32>,
     pub(crate) error: Option<String>,
+    #[serde(default)]
+    pub(crate) activity: HookActivity,
+    pub(crate) hook_event: Option<HookEventKind>,
+    pub(crate) hook_at_ms: Option<u64>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) waiting_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -338,6 +387,13 @@ fn validate_request(request: &Request) -> Result<()> {
             }
             Ok(())
         }
+        Request::HookEvent {
+            provider_session_id,
+            event,
+        } => {
+            validate_provider_session_id(provider_session_id)?;
+            validate_hook_event(event)
+        }
     }
 }
 
@@ -414,6 +470,16 @@ fn validate_session_state(session: &SessionState) -> Result<()> {
     BASE64
         .decode(&session.screen_ansi_base64)
         .context("session screen_ansi_base64 is invalid")?;
+    validate_optional_hook_text(
+        session.tool_name.as_deref(),
+        "session tool_name",
+        MAX_HOOK_SHORT_TEXT_BYTES,
+    )?;
+    validate_optional_hook_text(
+        session.waiting_reason.as_deref(),
+        "session waiting_reason",
+        MAX_HOOK_MESSAGE_BYTES,
+    )?;
     Ok(())
 }
 
@@ -423,6 +489,58 @@ pub(crate) fn validate_owner(owner: &str) -> Result<()> {
         || owner.chars().any(char::is_control)
     {
         bail!("owner must contain between 1 and {MAX_OWNER_BYTES} bytes and no control characters");
+    }
+    Ok(())
+}
+
+fn validate_provider_session_id(provider_session_id: &str) -> Result<()> {
+    let valid = provider_session_id.len() == PROVIDER_SESSION_ID_BYTES
+        && provider_session_id
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            });
+    if !valid {
+        bail!("provider_session_id must be a canonical UUID");
+    }
+    Ok(())
+}
+
+fn validate_hook_event(event: &HookEvent) -> Result<()> {
+    if let Some(cwd) = event.cwd.as_deref()
+        && (cwd.len() > MAX_HOOK_CWD_BYTES || cwd.contains('\0'))
+    {
+        bail!("hook cwd must contain at most {MAX_HOOK_CWD_BYTES} bytes and no NUL characters");
+    }
+    validate_optional_hook_text(
+        event.tool_name.as_deref(),
+        "hook tool_name",
+        MAX_HOOK_SHORT_TEXT_BYTES,
+    )?;
+    validate_optional_hook_text(
+        event.message.as_deref(),
+        "hook message",
+        MAX_HOOK_MESSAGE_BYTES,
+    )?;
+    validate_optional_hook_text(
+        event.notification_type.as_deref(),
+        "hook notification_type",
+        MAX_HOOK_SHORT_TEXT_BYTES,
+    )?;
+    validate_optional_hook_text(
+        event.level.as_deref(),
+        "hook level",
+        MAX_HOOK_SHORT_TEXT_BYTES,
+    )
+}
+
+fn validate_optional_hook_text(value: Option<&str>, field: &str, max_bytes: usize) -> Result<()> {
+    if let Some(value) = value
+        && (value.len() > max_bytes || value.chars().any(char::is_control))
+    {
+        bail!("{field} must contain at most {max_bytes} bytes and no control characters");
     }
     Ok(())
 }
@@ -445,6 +563,31 @@ fn validate_identifier(value: &str, field: impl Display) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn hook_event(kind: HookEventKind) -> HookEvent {
+        HookEvent {
+            kind,
+            cwd: None,
+            tool_name: None,
+            message: None,
+            notification_type: None,
+            level: None,
+        }
+    }
+
+    fn hook_request(provider_session_id: &str, event: HookEvent) -> RequestEnvelope {
+        RequestEnvelope {
+            id: "request-hook".to_owned(),
+            request: Request::HookEvent {
+                provider_session_id: provider_session_id.to_owned(),
+                event,
+            },
+        }
+    }
+
+    fn valid_provider_session_id() -> &'static str {
+        "01234567-89ab-4def-8123-456789abcdef"
+    }
+
     #[test]
     fn request_round_trip_preserves_create_fields() {
         let request = RequestEnvelope {
@@ -460,6 +603,24 @@ mod tests {
 
         let frame = encode_frame(&request).unwrap();
         assert_eq!(frame.last(), Some(&b'\n'));
+        assert_eq!(decode_request(&frame).unwrap(), request);
+    }
+
+    #[test]
+    fn request_round_trip_preserves_hook_event_fields() {
+        let request = hook_request(
+            "01234567-89AB-4DEF-8123-456789ABCDEF",
+            HookEvent {
+                kind: HookEventKind::Notification,
+                cwd: Some(r"C:\work tree\repo".to_owned()),
+                tool_name: Some("ask_user_question".to_owned()),
+                message: Some("需要用户确认".to_owned()),
+                notification_type: Some("permission_prompt".to_owned()),
+                level: Some("info".to_owned()),
+            },
+        );
+
+        let frame = encode_frame(&request).unwrap();
         assert_eq!(decode_request(&frame).unwrap(), request);
     }
 
@@ -498,6 +659,10 @@ mod tests {
             },
             Request::Close {
                 session: "session-1".to_owned(),
+            },
+            Request::HookEvent {
+                provider_session_id: valid_provider_session_id().to_owned(),
+                event: hook_event(HookEventKind::Stop),
             },
         ];
 
@@ -573,6 +738,101 @@ mod tests {
         }
         let oversized = request(Some("x".repeat(MAX_OWNER_BYTES + 1)));
         assert!(decode_request(&encode_frame(&oversized).unwrap()).is_err());
+    }
+
+    #[test]
+    fn validates_provider_session_id_as_canonical_uuid() {
+        for provider_session_id in [
+            valid_provider_session_id(),
+            "01234567-89AB-4DEF-8123-456789ABCDEF",
+        ] {
+            let request =
+                hook_request(provider_session_id, hook_event(HookEventKind::SessionStart));
+            assert!(decode_request(&encode_frame(&request).unwrap()).is_ok());
+        }
+
+        for provider_session_id in [
+            "0123456789ab-4def-8123-456789abcdef",
+            "01234567-89ab4-def-8123-456789abcdef",
+            "01234567-89ab-4def-8123-456789abcdeg",
+            "{01234567-89ab-4def-8123-456789abcdef}",
+            "01234567-89ab-4def-8123-456789abcde",
+        ] {
+            let request =
+                hook_request(provider_session_id, hook_event(HookEventKind::SessionStart));
+            assert!(decode_request(&encode_frame(&request).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn validates_hook_event_field_limits() {
+        let maximum = HookEvent {
+            kind: HookEventKind::PreToolUse,
+            cwd: Some("c".repeat(MAX_HOOK_CWD_BYTES)),
+            tool_name: Some("t".repeat(MAX_HOOK_SHORT_TEXT_BYTES)),
+            message: Some("m".repeat(MAX_HOOK_MESSAGE_BYTES)),
+            notification_type: Some("n".repeat(MAX_HOOK_SHORT_TEXT_BYTES)),
+            level: Some("l".repeat(MAX_HOOK_SHORT_TEXT_BYTES)),
+        };
+        let request = hook_request(valid_provider_session_id(), maximum);
+        assert!(decode_request(&encode_frame(&request).unwrap()).is_ok());
+
+        let oversized = [
+            HookEvent {
+                cwd: Some("c".repeat(MAX_HOOK_CWD_BYTES + 1)),
+                ..hook_event(HookEventKind::SessionStart)
+            },
+            HookEvent {
+                tool_name: Some("t".repeat(MAX_HOOK_SHORT_TEXT_BYTES + 1)),
+                ..hook_event(HookEventKind::PreToolUse)
+            },
+            HookEvent {
+                message: Some("m".repeat(MAX_HOOK_MESSAGE_BYTES + 1)),
+                ..hook_event(HookEventKind::Notification)
+            },
+            HookEvent {
+                notification_type: Some("n".repeat(MAX_HOOK_SHORT_TEXT_BYTES + 1)),
+                ..hook_event(HookEventKind::Notification)
+            },
+            HookEvent {
+                level: Some("l".repeat(MAX_HOOK_SHORT_TEXT_BYTES + 1)),
+                ..hook_event(HookEventKind::Notification)
+            },
+        ];
+        for event in oversized {
+            let request = hook_request(valid_provider_session_id(), event);
+            assert!(decode_request(&encode_frame(&request).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_forbidden_hook_event_characters() {
+        let invalid = [
+            HookEvent {
+                cwd: Some("bad\0cwd".to_owned()),
+                ..hook_event(HookEventKind::SessionStart)
+            },
+            HookEvent {
+                tool_name: Some("bad\rtool".to_owned()),
+                ..hook_event(HookEventKind::PreToolUse)
+            },
+            HookEvent {
+                message: Some("bad\u{7f}message".to_owned()),
+                ..hook_event(HookEventKind::Notification)
+            },
+            HookEvent {
+                notification_type: Some("bad\tnotification".to_owned()),
+                ..hook_event(HookEventKind::Notification)
+            },
+            HookEvent {
+                level: Some("bad\nlevel".to_owned()),
+                ..hook_event(HookEventKind::Notification)
+            },
+        ];
+        for event in invalid {
+            let request = hook_request(valid_provider_session_id(), event);
+            assert!(decode_request(&encode_frame(&request).unwrap()).is_err());
+        }
     }
 
     #[test]
@@ -693,6 +953,37 @@ mod tests {
     }
 
     #[test]
+    fn serializes_all_hook_event_kinds_in_snake_case() {
+        let kinds = [
+            (HookEventKind::SessionStart, "\"session_start\""),
+            (HookEventKind::UserPromptSubmit, "\"user_prompt_submit\""),
+            (HookEventKind::Stop, "\"stop\""),
+            (HookEventKind::StopFailure, "\"stop_failure\""),
+            (HookEventKind::SessionEnd, "\"session_end\""),
+            (HookEventKind::PreToolUse, "\"pre_tool_use\""),
+            (HookEventKind::PostToolUse, "\"post_tool_use\""),
+            (
+                HookEventKind::PostToolUseFailure,
+                "\"post_tool_use_failure\"",
+            ),
+            (HookEventKind::Notification, "\"notification\""),
+        ];
+        for (kind, expected) in kinds {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), expected);
+        }
+
+        let activities = [
+            (HookActivity::Unknown, "\"unknown\""),
+            (HookActivity::Working, "\"working\""),
+            (HookActivity::Waiting, "\"waiting\""),
+            (HookActivity::Done, "\"done\""),
+        ];
+        for (activity, expected) in activities {
+            assert_eq!(serde_json::to_string(&activity).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn validates_session_timestamps_and_wait_state() {
         let invalid_session = ResponseEnvelope::success(
             "r1",
@@ -715,6 +1006,11 @@ mod tests {
                 updated_at_ms: 10,
                 exit_code: None,
                 error: None,
+                activity: HookActivity::Waiting,
+                hook_event: Some(HookEventKind::PreToolUse),
+                hook_at_ms: Some(10),
+                tool_name: Some("ask_user_question".to_owned()),
+                waiting_reason: Some("Waiting for an answer".to_owned()),
             }),
         );
         assert!(decode_response(&encode_frame(&invalid_session).unwrap()).is_err());
