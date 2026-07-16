@@ -126,6 +126,7 @@ jobs:
             "$root/bin/macos-arm64"
 
           install -m 0644 README.md "$root/README.md"
+          install -m 0644 README-CN.md "$root/README-CN.md"
           install -m 0644 SKILL.md "$root/SKILL.md"
           install -m 0644 agents/openai.yaml "$root/agents/openai.yaml"
           install -m 0644 hooks/windows/grok-bridge.json "$root/hooks/windows/grok-bridge.json"
@@ -137,7 +138,7 @@ jobs:
           install -m 0755 artifacts/binary-macos-x86_64/grok-bridge "$root/bin/macos-x86_64/grok-bridge"
           install -m 0755 artifacts/binary-macos-arm64/grok-bridge "$root/bin/macos-arm64/grok-bridge"
 
-          test "$(find "$root" -type f | wc -l)" -eq 11
+          test "$(find "$root" -type f | wc -l)" -eq 12
           for hook in "$root/hooks/windows/grok-bridge.json" "$root/hooks/unix/grok-bridge.json"; do
             jq -e '.hooks | length == 14' "$hook" >/dev/null
             jq -e '[.hooks[][].hooks[] | select(.env.GROK_BRIDGE_HOOK_PROTOCOL == "4")] | length == 14' "$hook" >/dev/null
