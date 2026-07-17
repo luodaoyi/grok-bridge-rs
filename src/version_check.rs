@@ -110,10 +110,7 @@ impl VersionChecker {
 }
 
 pub(crate) fn normalize_tag(tag: &str) -> String {
-    tag.trim()
-        .trim_start_matches(['v', 'V'])
-        .trim()
-        .to_owned()
+    tag.trim().trim_start_matches(['v', 'V']).trim().to_owned()
 }
 
 pub(crate) fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
