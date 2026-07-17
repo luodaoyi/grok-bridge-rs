@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 - 2026-07-17
+
+- Made each Grok session card collapsible inside Codex groups so multi-session dashboards stay compact without collapsing sibling sessions.
+- Hardened WebUI polling against hung Runtime, invalid JSON, and non-array payloads with request timeouts, payload normalization, continuous retry, and a render error boundary.
+- Added a GitHub repository link in the WebUI header: https://github.com/luodaoyi/grok-bridge-rs
+
 ## 0.6.0 - 2026-07-15
 
 - Expanded managed Grok Build Hooks to all 14 currently documented events, including permission denial, subagent lifecycle, and compaction, and added completion guards so late tool events cannot revive a finished turn.

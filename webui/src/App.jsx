@@ -3,6 +3,7 @@ import {
   ChevronsUpDown,
   ChevronRight,
   CircleStop,
+  ExternalLink,
   Moon,
   MonitorCog,
   RefreshCw,
@@ -38,6 +39,8 @@ import {
 import { applyTheme, readTheme } from "./theme.js";
 
 const terminalScroll = new Map();
+const POLL_MS = 2000;
+const GITHUB_URL = "https://github.com/luodaoyi/grok-bridge-rs";
 
 const buttonBase =
   "inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50";
@@ -130,10 +133,10 @@ function SessionMeta({ label, children, wide = false, title }) {
 function captureTerminal(terminal) {
   return terminal
     ? {
-      top: terminal.scrollTop,
-      left: terminal.scrollLeft,
-      stickToBottom:
-        terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 8,
+        top: terminal.scrollTop,
+        left: terminal.scrollLeft,
+        stickToBottom:
+          terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 8,
       }
     : null;
 }
@@ -188,72 +191,136 @@ class Terminal extends Component {
   }
 }
 
-function SessionRow({ session, onClose, busy }) {
+class AppErrorBoundary extends Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error("WebUI render error:", error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="mx-auto max-w-xl px-4 py-16 text-center">
+          <h1 className="text-lg font-bold text-[var(--strong)]">
+            页面渲染异常
+          </h1>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            {String(this.state.error?.message || this.state.error)}
+          </p>
+          <button
+            className={`${secondaryButton} mt-4`}
+            type="button"
+            onClick={() => {
+              this.setState({ error: null });
+              window.location.reload();
+            }}
+          >
+            重新加载
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function SessionRow({ session, collapsed, onToggle, onClose, busy }) {
   const activity = activityOf(session);
+  const title = session.title || session.session;
   return (
-    <article className="min-w-0 border-t border-[var(--border)] bg-[var(--session-bg)] px-3 py-3 first:border-t-0 sm:px-4">
-      <div className="flex min-w-0 items-start justify-between gap-3 max-sm:flex-col">
-        <div className="min-w-0">
-          <span
-            className={`badge badge-${activity} inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold`}
-            title={`PTY 阶段：${session.phase}`}
-          >
-            {activityLabel(activity)}
-          </span>
+    <details
+      className="session group/session min-w-0 border-t border-[var(--border)] bg-[var(--session-bg)] first:border-t-0 open:bg-[var(--session-bg)]"
+      data-session={session.session}
+      open={!collapsed}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
+    >
+      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 px-3 py-2.5 marker:hidden focus-visible:outline-2 focus-visible:outline-[var(--focus)] sm:px-4">
+        <ChevronRight
+          aria-hidden="true"
+          className="shrink-0 text-[var(--accent)] transition-transform group-open/session:rotate-90"
+          size={16}
+        />
+        <span
+          className={`badge badge-${activity} inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold`}
+          title={`PTY 阶段：${session.phase}`}
+        >
+          {activityLabel(activity)}
+        </span>
+        <div className="min-w-0 flex-1">
           <h3
-            className="mt-1.5 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-[var(--text)]"
-            title={session.title || session.session}
+            className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-[var(--text)]"
+            title={title}
           >
-            {session.title || session.session}
+            {title}
           </h3>
+          {collapsed ? (
+            <p className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[var(--subtle)]">
+              {session.session}
+              {session.tool_name ? ` · ${session.tool_name}` : ""}
+              {session.waiting_reason ? ` · 等待：${session.waiting_reason}` : ""}
+            </p>
+          ) : null}
         </div>
         <button
           className={`${dangerButton} shrink-0`}
           type="button"
           disabled={busy}
-          onClick={() => onClose(session.session)}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose(session.session);
+          }}
         >
           <CircleStop aria-hidden="true" size={14} />
           关闭 Grok
         </button>
-      </div>
-      <div className="my-3 flex min-w-0 flex-wrap items-start gap-x-5 gap-y-2">
-        <SessionMeta label="会话 ID" title={session.session}>
-          {session.session}
-        </SessionMeta>
-        <SessionMeta label="进程">
-          PID {session.process_id ?? "-"}
-        </SessionMeta>
-        <SessionMeta label="最近更新">
-          <Age updatedAt={session.updated_at_ms} />
-        </SessionMeta>
-        <SessionMeta label="Codex 连接">
-          {clientStateLabel(session.client_state)}
-        </SessionMeta>
-        {session.auto_close_at_ms ? (
-          <SessionMeta label="自动清理倒计时">
-            {remainingLabel(session.auto_close_at_ms)}
-          </SessionMeta>
-        ) : null}
-        {session.hook_event ? (
-          <SessionMeta label="最近 Hook">{session.hook_event}</SessionMeta>
-        ) : null}
-        {session.tool_name ? (
-          <SessionMeta label="当前工具" title={session.tool_name}>
-            {session.tool_name}
-          </SessionMeta>
-        ) : null}
-        <SessionMeta label="工作目录" title={session.cwd} wide>
-          {session.cwd}
-        </SessionMeta>
-      </div>
-      {session.waiting_reason ? (
-        <p className="mb-3 rounded-r-md border-l-[3px] border-[var(--waiting-note-border)] bg-[var(--waiting-note-bg)] px-2.5 py-2 text-xs text-[var(--waiting-text)]">
-          等待 Codex：{session.waiting_reason}
-        </p>
-      ) : null}
-      <Terminal id={session.session} screen={session.screen} />
-    </article>
+      </summary>
+      {collapsed ? null : (
+        <div className="px-3 pb-3 sm:px-4">
+          <div className="my-1 flex min-w-0 flex-wrap items-start gap-x-5 gap-y-2">
+            <SessionMeta label="会话 ID" title={session.session}>
+              {session.session}
+            </SessionMeta>
+            <SessionMeta label="进程">
+              PID {session.process_id ?? "-"}
+            </SessionMeta>
+            <SessionMeta label="最近更新">
+              <Age updatedAt={session.updated_at_ms} />
+            </SessionMeta>
+            <SessionMeta label="Codex 连接">
+              {clientStateLabel(session.client_state)}
+            </SessionMeta>
+            {session.auto_close_at_ms ? (
+              <SessionMeta label="自动清理倒计时">
+                {remainingLabel(session.auto_close_at_ms)}
+              </SessionMeta>
+            ) : null}
+            {session.hook_event ? (
+              <SessionMeta label="最近 Hook">{session.hook_event}</SessionMeta>
+            ) : null}
+            {session.tool_name ? (
+              <SessionMeta label="当前工具" title={session.tool_name}>
+                {session.tool_name}
+              </SessionMeta>
+            ) : null}
+            <SessionMeta label="工作目录" title={session.cwd} wide>
+              {session.cwd}
+            </SessionMeta>
+          </div>
+          {session.waiting_reason ? (
+            <p className="mb-3 rounded-r-md border-l-[3px] border-[var(--waiting-note-border)] bg-[var(--waiting-note-bg)] px-2.5 py-2 text-xs text-[var(--waiting-text)]">
+              等待 Codex：{session.waiting_reason}
+            </p>
+          ) : null}
+          <Terminal id={session.session} screen={session.screen} />
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -267,7 +334,9 @@ function OwnerGroup({
   clientSessionId,
   sessions,
   collapsed,
+  collapsedSessions,
   onToggle,
+  onToggleSession,
   onCloseGroup,
   onCloseSession,
   busy,
@@ -322,6 +391,8 @@ function OwnerGroup({
             <SessionRow
               key={session.session}
               session={session}
+              collapsed={collapsedSessions.has(session.session)}
+              onToggle={(open) => onToggleSession(session.session, open)}
               onClose={onCloseSession}
               busy={busy}
             />
@@ -332,25 +403,42 @@ function OwnerGroup({
   );
 }
 
+function errorMessage(error) {
+  if (!error) return "unknown error";
+  if (error.name === "AbortError") return "请求超时，正在自动重试";
+  return error.message || String(error);
+}
+
 export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppShell />
+    </AppErrorBoundary>
+  );
+}
+
+function AppShell() {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [notice, setNotice] = useState(null);
   const [collapsedOwners, setCollapsedOwners] = useState(() => new Set());
+  const [collapsedSessions, setCollapsedSessions] = useState(() => new Set());
   const signatureRef = useRef(null);
   const loadingRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const groups = useMemo(() => groupSessions(sessions), [sessions]);
   const stats = useMemo(() => sessionStats(sessions), [sessions]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ quiet = false } = {}) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       const nextSessions = await getSessions();
+      if (!mountedRef.current) return;
       const signature = sessionsSignature(nextSessions);
       if (signature !== signatureRef.current) {
         signatureRef.current = signature;
@@ -358,19 +446,49 @@ export default function App() {
       }
       setConnected(true);
       setLastUpdated(new Date());
+      setNotice((current) =>
+        current?.tone === "error" &&
+        String(current.text || "").startsWith("读取 Runtime 状态失败")
+          ? null
+          : current,
+      );
     } catch (error) {
+      if (!mountedRef.current) return;
       setConnected(false);
-      setNotice({ tone: "error", text: `读取 Runtime 状态失败：${error}` });
+      setNotice({
+        tone: "error",
+        text: `读取 Runtime 状态失败：${errorMessage(error)}（将自动重试）`,
+      });
     } finally {
       loadingRef.current = false;
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
-    const timer = window.setInterval(load, 2000);
-    return () => window.clearInterval(timer);
+    mountedRef.current = true;
+    let cancelled = false;
+    let timer = 0;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        await load({ quiet: true });
+      } catch (error) {
+        // load already swallows request errors; keep the loop alive.
+        console.warn("poll tick failed:", error);
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(tick, POLL_MS);
+      }
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+      mountedRef.current = false;
+      window.clearTimeout(timer);
+    };
   }, [load]);
 
   const closeSession = useCallback(
@@ -383,10 +501,17 @@ export default function App() {
         await closeSessionRequest(id);
         setNotice({ tone: "info", text: `已关闭 Grok 会话 ${id}。` });
       } catch (error) {
-        setNotice({ tone: "error", text: `关闭失败：${error}` });
+        setNotice({
+          tone: "error",
+          text: `关闭失败：${errorMessage(error)}`,
+        });
       } finally {
         loadingRef.current = false;
-        await load();
+        try {
+          await load();
+        } catch {
+          setLoading(false);
+        }
       }
     },
     [load],
@@ -410,14 +535,17 @@ export default function App() {
           ? await closeClientRequest(clientSessionId)
           : await closeOwnerRequest(owner);
         if (result.matched === 0) {
-          setNotice({ tone: "info", text: "该 Codex 分组已没有活跃 Grok 会话。" });
+          setNotice({
+            tone: "info",
+            text: "该 Codex 分组已没有活跃 Grok 会话。",
+          });
         } else if (
-          result.failures.length ||
+          result.failures?.length ||
           result.closed !== result.matched
         ) {
           setNotice({
             tone: "error",
-            text: `已关闭 ${result.closed}/${result.matched} 个会话；失败：${result.failures.join("、")}`,
+            text: `已关闭 ${result.closed}/${result.matched} 个会话；失败：${(result.failures || []).join("、")}`,
           });
         } else {
           setNotice({
@@ -426,10 +554,17 @@ export default function App() {
           });
         }
       } catch (error) {
-        setNotice({ tone: "error", text: `关闭失败：${error}` });
+        setNotice({
+          tone: "error",
+          text: `关闭失败：${errorMessage(error)}`,
+        });
       } finally {
         loadingRef.current = false;
-        await load();
+        try {
+          await load();
+        } catch {
+          setLoading(false);
+        }
       }
     },
     [load],
@@ -444,13 +579,25 @@ export default function App() {
     });
   }, []);
 
-  const setAllGroups = useCallback(
+  const toggleSession = useCallback((sessionId, open) => {
+    setCollapsedSessions((current) => {
+      const next = new Set(current);
+      if (open) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }, []);
+
+  const setAllExpanded = useCallback(
     (open) => {
       setCollapsedOwners(
         open ? new Set() : new Set(groups.map(([groupKey]) => groupKey)),
       );
+      setCollapsedSessions(
+        open ? new Set() : new Set(sessions.map((session) => session.session)),
+      );
     },
-    [groups],
+    [groups, sessions],
   );
 
   return (
@@ -476,18 +623,28 @@ export default function App() {
               <Server aria-hidden="true" size={14} />
               {connected ? "本机服务已连接" : "Runtime 连接异常"}
             </span>
+            <a
+              className={`${secondaryButton} no-underline`}
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noreferrer"
+              title="在 GitHub 打开 grok-bridge-rs"
+            >
+              <ExternalLink aria-hidden="true" size={14} />
+              GitHub
+            </a>
             <ThemeSwitcher />
           </div>
         </div>
         <p className="mt-2 max-w-4xl text-sm leading-5 text-[var(--muted)]">
-          实时查看 Codex 所属 Grok 进程与终端状态。
+          实时查看 Codex 所属 Grok 进程与终端状态。单个 Grok 窗口可折叠，方便在多会话时保持总览。
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             className={secondaryButton}
             type="button"
             disabled={loading}
-            onClick={load}
+            onClick={() => load()}
           >
             <RefreshCw
               aria-hidden="true"
@@ -499,7 +656,7 @@ export default function App() {
           <button
             className={secondaryButton}
             type="button"
-            onClick={() => setAllGroups(true)}
+            onClick={() => setAllExpanded(true)}
           >
             <ChevronsUpDown aria-hidden="true" size={14} />
             全部展开
@@ -507,7 +664,7 @@ export default function App() {
           <button
             className={secondaryButton}
             type="button"
-            onClick={() => setAllGroups(false)}
+            onClick={() => setAllExpanded(false)}
           >
             <ChevronsDownUp aria-hidden="true" size={14} />
             全部折叠
@@ -563,7 +720,9 @@ export default function App() {
                 clientSessionId={clientSessionId}
                 sessions={ownerSessions}
                 collapsed={collapsedOwners.has(key)}
+                collapsedSessions={collapsedSessions}
                 onToggle={(open) => toggleOwner(key, open)}
+                onToggleSession={toggleSession}
                 onCloseGroup={closeGroup}
                 onCloseSession={closeSession}
                 busy={loading}

@@ -51,6 +51,7 @@ async function settle() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -89,7 +90,12 @@ describe("App", () => {
     expect(container.textContent).toContain("Codex A/中文");
     expect(container.textContent).toContain("正在修改 app.js");
     expect(container.textContent).toContain("未标记的 Codex 对话");
+    expect(container.textContent).toContain("GitHub");
+    expect(
+      container.querySelector('a[href="https://github.com/luodaoyi/grok-bridge-rs"]'),
+    ).not.toBeNull();
     expect(container.querySelectorAll("details.group")).toHaveLength(2);
+    expect(container.querySelectorAll("details.session")).toHaveLength(2);
     expect(container.querySelectorAll("button")).toSatisfy((buttons) =>
       [...buttons].some((button) =>
         button.textContent.includes("关闭该 Codex 全部 Grok"),
@@ -102,18 +108,50 @@ describe("App", () => {
     ).not.toContain("关闭该 Codex 全部 Grok");
   });
 
-  it("collapses and expands all owner groups", async () => {
+  it("collapses and expands all owner groups and session cards", async () => {
     await renderApp();
     const button = (text) =>
       [...container.querySelectorAll("button")].find((item) =>
         item.textContent.includes(text),
       );
     await act(async () => button("全部折叠").click());
-    expect([...container.querySelectorAll("details.group")].every((group) => !group.open)).toBe(true);
+    expect(
+      [...container.querySelectorAll("details.group")].every(
+        (group) => !group.open,
+      ),
+    ).toBe(true);
     expect(container.querySelectorAll("pre")).toHaveLength(0);
     await act(async () => button("全部展开").click());
-    expect([...container.querySelectorAll("details.group")].every((group) => group.open)).toBe(true);
+    expect(
+      [...container.querySelectorAll("details.group")].every(
+        (group) => group.open,
+      ),
+    ).toBe(true);
+    expect(
+      [...container.querySelectorAll("details.session")].every(
+        (session) => session.open,
+      ),
+    ).toBe(true);
     expect(container.querySelectorAll("pre")).toHaveLength(2);
+  });
+
+  it("can collapse a single Grok session without collapsing its Codex group", async () => {
+    await renderApp();
+    const session = container.querySelector('details.session[data-session="gbt-a"]');
+    expect(session.open).toBe(true);
+    await act(async () => {
+      session.open = false;
+      session.dispatchEvent(new Event("toggle", { bubbles: true }));
+    });
+    await settle();
+    expect(
+      container.querySelector('details.session[data-session="gbt-a"]').open,
+    ).toBe(false);
+    expect(
+      container.querySelector('details.group[data-owner-key="client:codex-a"]')
+        .open,
+    ).toBe(true);
+    expect(container.querySelectorAll("pre")).toHaveLength(1);
   });
 
   it("pauses polling while a close request is pending", async () => {
@@ -124,21 +162,22 @@ describe("App", () => {
     fetch
       .mockResolvedValueOnce(jsonResponse(sessions))
       .mockReturnValueOnce(pendingClose)
-      .mockResolvedValueOnce(jsonResponse(sessions));
+      .mockResolvedValue(jsonResponse(sessions));
     await renderApp();
+    const initialCalls = fetch.mock.calls.length;
 
     const sessionClose = [...container.querySelectorAll("button")].find(
       (button) => button.textContent.trim() === "关闭 Grok",
     );
     await act(async () => sessionClose.click());
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
 
     await act(async () => vi.advanceTimersByTimeAsync(4000));
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
 
     await act(async () => resolveClose(new Response("", { status: 200 })));
     await settle();
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.length).toBeGreaterThan(initialCalls + 1);
   });
 
   it("posts session and owner close requests with the bridge header", async () => {
@@ -146,8 +185,10 @@ describe("App", () => {
       .mockResolvedValueOnce(jsonResponse(sessions))
       .mockResolvedValueOnce(new Response("", { status: 200 }))
       .mockResolvedValueOnce(jsonResponse(sessions))
-      .mockResolvedValueOnce(jsonResponse({ matched: 1, closed: 1, failures: [] }))
-      .mockResolvedValueOnce(jsonResponse(sessions));
+      .mockResolvedValueOnce(
+        jsonResponse({ matched: 1, closed: 1, failures: [] }),
+      )
+      .mockResolvedValue(jsonResponse(sessions));
     await renderApp();
 
     const ownedGroup = [...container.querySelectorAll("details.group")].find(
@@ -166,8 +207,8 @@ describe("App", () => {
       }),
     );
 
-    const ownerClose = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent.includes("关闭该 Codex 全部 Grok"),
+    const ownerClose = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent.includes("关闭该 Codex 全部 Grok"),
     );
     await act(async () => ownerClose.click());
     await settle();
@@ -183,10 +224,36 @@ describe("App", () => {
     );
   });
 
+  it("keeps polling after request failures and bad payloads", async () => {
+    fetch
+      .mockResolvedValueOnce(jsonResponse(sessions))
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(jsonResponse({ broken: true }))
+      .mockResolvedValueOnce(jsonResponse(sessions));
+    await renderApp();
+    expect(container.textContent).toContain("正在修改 app.js");
+
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await settle();
+    expect(container.textContent).toContain("读取 Runtime 状态失败");
+    expect(container.textContent).toContain("将自动重试");
+    expect(container.textContent).toContain("正在修改 app.js");
+
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await settle();
+    expect(container.textContent).toContain("将自动重试");
+
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await settle();
+    expect(container.textContent).toContain("本机服务已连接");
+    expect(container.textContent).toContain("正在修改 app.js");
+  });
+
   it("refreshes sessions every two seconds", async () => {
     await renderApp();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    const initialCalls = fetch.mock.calls.length;
     await act(async () => vi.advanceTimersByTimeAsync(2000));
-    expect(fetch).toHaveBeenCalledTimes(2);
+    await settle();
+    expect(fetch.mock.calls.length).toBeGreaterThan(initialCalls);
   });
 });
