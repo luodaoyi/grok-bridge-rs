@@ -20,6 +20,7 @@ use crate::{
     },
     session::{OrphanPolicy, SessionHost},
     transport::{call_anonymous, read_frame, runtime_name, write_response},
+    version_check::{CHECK_INTERVAL, VersionChecker},
 };
 
 pub(crate) fn run() -> Result<()> {
@@ -52,6 +53,7 @@ pub(crate) fn run() -> Result<()> {
         started_at_ms: now_millis(),
         stopping: AtomicBool::new(false),
         web_url,
+        version_checker: Arc::new(VersionChecker::new()),
     });
     if let Some(listener) = web_listener {
         let web_state = Arc::clone(&state);
@@ -60,6 +62,10 @@ pub(crate) fn run() -> Result<()> {
     {
         let reaper_state = Arc::clone(&state);
         thread::spawn(move || run_orphan_reaper(reaper_state));
+    }
+    {
+        let version_state = Arc::clone(&state);
+        thread::spawn(move || run_version_checker(version_state));
     }
 
     for connection in listener.incoming() {
@@ -89,6 +95,7 @@ struct RuntimeState {
     started_at_ms: u64,
     stopping: AtomicBool,
     web_url: Option<String>,
+    version_checker: Arc<VersionChecker>,
 }
 
 fn handle_connection(stream: Stream, state: Arc<RuntimeState>) {
@@ -255,6 +262,24 @@ fn run_orphan_reaper(state: Arc<RuntimeState>) {
     }
 }
 
+fn run_version_checker(state: Arc<RuntimeState>) {
+    loop {
+        if state.stopping.load(Ordering::Acquire) {
+            return;
+        }
+        state.version_checker.refresh();
+        let mut remaining = CHECK_INTERVAL;
+        while remaining > Duration::ZERO {
+            if state.stopping.load(Ordering::Acquire) {
+                return;
+            }
+            let slice = remaining.min(Duration::from_secs(30));
+            thread::sleep(slice);
+            remaining = remaining.saturating_sub(slice);
+        }
+    }
+}
+
 impl RuntimeState {
     fn server_info(&self) -> ServerInfo {
         ServerInfo {
@@ -331,6 +356,13 @@ fn handle_web_connection(mut stream: TcpStream, state: Arc<RuntimeState>) {
                 );
             }
         },
+        ("GET", "/api/version") => {
+            let body = serde_json::to_string(&state.version_checker.status())
+                .unwrap_or_else(|_| {
+                    r#"{"current":"unknown","update_available":false,"release_url":"https://github.com/luodaoyi/grok-bridge-rs/releases/latest"}"#.to_owned()
+                });
+            let _ = write_http(&mut stream, "200 OK", "application/json", &body);
+        }
         ("POST", path) if path.starts_with("/api/clients/") => {
             let Some(encoded_client) = close_path_segment(path, "/api/clients/") else {
                 let _ = write_http(
@@ -713,6 +745,23 @@ mod tests {
     }
 
     #[test]
+    fn version_api_reports_current_package_version() {
+        let response = serve_web_request(b"GET /api/version HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let (headers, body) = split_http_response(&response);
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(headers.contains("Content-Type: application/json"));
+        let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(value["current"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(value["update_available"], false);
+        assert!(
+            value["release_url"]
+                .as_str()
+                .unwrap()
+                .contains("github.com/luodaoyi/grok-bridge-rs/releases")
+        );
+    }
+
+    #[test]
     fn byte_http_writer_uses_raw_body_length() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -772,6 +821,7 @@ mod tests {
                 started_at_ms: 0,
                 stopping: AtomicBool::new(false),
                 web_url: None,
+                version_checker: Arc::new(VersionChecker::new()),
             }),
         );
 

@@ -54,6 +54,45 @@ export async function getSessions({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   }
 }
 
+export function normalizeVersionStatus(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("version payload is not an object");
+  }
+  if (typeof data.current !== "string" || data.current.length === 0) {
+    throw new Error("version payload is missing current");
+  }
+  const latest =
+    typeof data.latest === "string" && data.latest.length > 0
+      ? data.latest
+      : null;
+  const releaseUrl =
+    typeof data.release_url === "string" && data.release_url.length > 0
+      ? data.release_url
+      : "https://github.com/luodaoyi/grok-bridge-rs/releases/latest";
+  return {
+    current: data.current,
+    latest,
+    update_available: Boolean(data.update_available) && latest != null,
+    release_url: releaseUrl,
+    checked_at_ms:
+      typeof data.checked_at_ms === "number" ? data.checked_at_ms : null,
+  };
+}
+
+export async function getVersionStatus({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const timeout = withTimeout(timeoutMs);
+  try {
+    const response = await fetch("/api/version", {
+      cache: "no-store",
+      signal: timeout.signal,
+    });
+    if (!response.ok) throw new Error(await responseError(response));
+    return normalizeVersionStatus(await parseJson(response));
+  } finally {
+    timeout.clear();
+  }
+}
+
 export async function closeSessionRequest(id, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const timeout = withTimeout(timeoutMs);
   try {

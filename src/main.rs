@@ -5,6 +5,7 @@ mod server;
 mod session;
 mod terminal_gui;
 mod transport;
+mod version_check;
 
 mod app {
     use std::{

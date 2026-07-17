@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2 - 2026-07-17
+
+- Added Runtime self-check for newer GitHub releases on a background interval, exposed through `GET /api/version` for the WebUI.
+- WebUI shows the current Runtime version and an update banner with the latest Release link when a newer version is available; users download and replace the binary themselves.
+- Version checks fail open on network errors and can be disabled with `GROK_BRIDGE_DISABLE_UPDATE_CHECK=1`.
+
 ## 0.6.1 - 2026-07-17
 
 - Made each Grok session card collapsible inside Codex groups so multi-session dashboards stay compact without collapsing sibling sessions.

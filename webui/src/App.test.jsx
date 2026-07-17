@@ -47,6 +47,36 @@ function jsonResponse(value) {
   });
 }
 
+function mockFetch(handlers = {}) {
+  return vi.fn(async (url) => {
+    const path = String(url);
+    if (path.includes("/api/version")) {
+      return jsonResponse(
+        handlers.version ?? {
+          current: "0.6.1",
+          latest: null,
+          update_available: false,
+          release_url:
+            "https://github.com/luodaoyi/grok-bridge-rs/releases/latest",
+        },
+      );
+    }
+    if (path.includes("/close")) {
+      if (handlers.close instanceof Response) return handlers.close;
+      if (typeof handlers.close === "function") return handlers.close(path);
+      if (path.includes("/api/sessions/")) {
+        return new Response("", { status: 200 });
+      }
+      return jsonResponse(
+        handlers.closeResult ?? { matched: 1, closed: 1, failures: [] },
+      );
+    }
+    if (handlers.sessions instanceof Response) return handlers.sessions;
+    if (typeof handlers.sessions === "function") return handlers.sessions(path);
+    return jsonResponse(handlers.sessions ?? sessions);
+  });
+}
+
 async function settle() {
   await act(async () => {
     await Promise.resolve();
@@ -67,7 +97,8 @@ describe("App", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(sessions)));
+    window.localStorage.clear();
+    vi.stubGlobal("fetch", mockFetch());
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -91,6 +122,7 @@ describe("App", () => {
     expect(container.textContent).toContain("正在修改 app.js");
     expect(container.textContent).toContain("未标记的 Codex 对话");
     expect(container.textContent).toContain("GitHub");
+    expect(container.textContent).toContain("Runtime v0.6.1");
     expect(
       container.querySelector('a[href="https://github.com/luodaoyi/grok-bridge-rs"]'),
     ).not.toBeNull();
@@ -154,41 +186,73 @@ describe("App", () => {
     expect(container.querySelectorAll("pre")).toHaveLength(1);
   });
 
+  it("shows update banner with release link and allows dismiss", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        version: {
+          current: "0.6.1",
+          latest: "0.6.2",
+          update_available: true,
+          release_url:
+            "https://github.com/luodaoyi/grok-bridge-rs/releases/tag/v0.6.2",
+        },
+      }),
+    );
+    await renderApp();
+    expect(container.textContent).toContain("发现新版本 v0.6.2");
+    expect(
+      container.querySelector(
+        'a[href="https://github.com/luodaoyi/grok-bridge-rs/releases/tag/v0.6.2"]',
+      ),
+    ).not.toBeNull();
+    const dismiss = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent.includes("稍后提醒"),
+    );
+    await act(async () => dismiss.click());
+    await settle();
+    expect(container.querySelector("[data-update-banner]")).toBeNull();
+    expect(window.localStorage.getItem("grok-bridge-dismissed-update")).toBe(
+      "0.6.2",
+    );
+  });
+
   it("pauses polling while a close request is pending", async () => {
     let resolveClose;
     const pendingClose = new Promise((resolve) => {
       resolveClose = resolve;
     });
-    fetch
-      .mockResolvedValueOnce(jsonResponse(sessions))
-      .mockReturnValueOnce(pendingClose)
-      .mockResolvedValue(jsonResponse(sessions));
+    const baseFetch = mockFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url, options) => {
+        if (String(url).includes("/close")) return pendingClose;
+        return baseFetch(url, options);
+      }),
+    );
     await renderApp();
-    const initialCalls = fetch.mock.calls.length;
+    const initialCloseCalls = fetch.mock.calls.filter((call) =>
+      String(call[0]).includes("/close"),
+    ).length;
 
     const sessionClose = [...container.querySelectorAll("button")].find(
       (button) => button.textContent.trim() === "关闭 Grok",
     );
     await act(async () => sessionClose.click());
-    expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
+    expect(
+      fetch.mock.calls.filter((call) => String(call[0]).includes("/close")),
+    ).toHaveLength(initialCloseCalls + 1);
 
+    const callsDuringPending = fetch.mock.calls.length;
     await act(async () => vi.advanceTimersByTimeAsync(4000));
-    expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
+    expect(fetch.mock.calls.length).toBe(callsDuringPending);
 
     await act(async () => resolveClose(new Response("", { status: 200 })));
     await settle();
-    expect(fetch.mock.calls.length).toBeGreaterThan(initialCalls + 1);
+    expect(fetch.mock.calls.length).toBeGreaterThan(callsDuringPending);
   });
 
   it("posts session and owner close requests with the bridge header", async () => {
-    fetch
-      .mockResolvedValueOnce(jsonResponse(sessions))
-      .mockResolvedValueOnce(new Response("", { status: 200 }))
-      .mockResolvedValueOnce(jsonResponse(sessions))
-      .mockResolvedValueOnce(
-        jsonResponse({ matched: 1, closed: 1, failures: [] }),
-      )
-      .mockResolvedValue(jsonResponse(sessions));
     await renderApp();
 
     const ownedGroup = [...container.querySelectorAll("details.group")].find(
@@ -225,11 +289,25 @@ describe("App", () => {
   });
 
   it("keeps polling after request failures and bad payloads", async () => {
-    fetch
-      .mockResolvedValueOnce(jsonResponse(sessions))
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockResolvedValueOnce(jsonResponse({ broken: true }))
-      .mockResolvedValueOnce(jsonResponse(sessions));
+    let sessionCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) => {
+        if (String(url).includes("/api/version")) {
+          return jsonResponse({
+            current: "0.6.1",
+            update_available: false,
+            release_url:
+              "https://github.com/luodaoyi/grok-bridge-rs/releases/latest",
+          });
+        }
+        sessionCalls += 1;
+        if (sessionCalls === 1) return jsonResponse(sessions);
+        if (sessionCalls === 2) throw new Error("network down");
+        if (sessionCalls === 3) return jsonResponse({ broken: true });
+        return jsonResponse(sessions);
+      }),
+    );
     await renderApp();
     expect(container.textContent).toContain("正在修改 app.js");
 

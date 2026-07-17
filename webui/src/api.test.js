@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getSessions, normalizeSessions } from "./api.js";
+import {
+  getSessions,
+  getVersionStatus,
+  normalizeSessions,
+  normalizeVersionStatus,
+} from "./api.js";
 
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -65,5 +70,58 @@ describe("getSessions", () => {
       vi.fn().mockResolvedValue(jsonResponse({ error: "boom" })),
     );
     await expect(getSessions()).rejects.toThrow(/not an array/i);
+  });
+});
+
+describe("normalizeVersionStatus", () => {
+  it("normalizes update payloads", () => {
+    expect(
+      normalizeVersionStatus({
+        current: "0.6.1",
+        latest: "0.6.2",
+        update_available: true,
+        release_url:
+          "https://github.com/luodaoyi/grok-bridge-rs/releases/tag/v0.6.2",
+        checked_at_ms: 42,
+      }),
+    ).toEqual({
+      current: "0.6.1",
+      latest: "0.6.2",
+      update_available: true,
+      release_url:
+        "https://github.com/luodaoyi/grok-bridge-rs/releases/tag/v0.6.2",
+      checked_at_ms: 42,
+    });
+  });
+
+  it("rejects invalid payloads", () => {
+    expect(() => normalizeVersionStatus([])).toThrow(/not an object/i);
+    expect(() => normalizeVersionStatus({})).toThrow(/missing current/i);
+  });
+});
+
+describe("getVersionStatus", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns normalized version status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          current: "0.6.1",
+          latest: "0.6.2",
+          update_available: true,
+          release_url:
+            "https://github.com/luodaoyi/grok-bridge-rs/releases/tag/v0.6.2",
+        }),
+      ),
+    );
+    await expect(getVersionStatus()).resolves.toMatchObject({
+      current: "0.6.1",
+      latest: "0.6.2",
+      update_available: true,
+    });
   });
 });

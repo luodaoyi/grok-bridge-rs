@@ -24,6 +24,7 @@ import {
   closeOwnerRequest,
   closeSessionRequest,
   getSessions,
+  getVersionStatus,
 } from "./api.js";
 import {
   activityLabel,
@@ -40,7 +41,26 @@ import { applyTheme, readTheme } from "./theme.js";
 
 const terminalScroll = new Map();
 const POLL_MS = 2000;
+const VERSION_POLL_MS = 60 * 60 * 1000;
 const GITHUB_URL = "https://github.com/luodaoyi/grok-bridge-rs";
+const DISMISS_UPDATE_KEY = "grok-bridge-dismissed-update";
+
+function readDismissedUpdate() {
+  try {
+    return window.localStorage.getItem(DISMISS_UPDATE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeDismissedUpdate(version) {
+  try {
+    if (version) window.localStorage.setItem(DISMISS_UPDATE_KEY, version);
+    else window.localStorage.removeItem(DISMISS_UPDATE_KEY);
+  } catch {
+    // ignore storage failures in private mode
+  }
+}
 
 const buttonBase =
   "inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50";
@@ -409,6 +429,41 @@ function errorMessage(error) {
   return error.message || String(error);
 }
 
+function UpdateBanner({ version, onDismiss }) {
+  if (!version?.update_available || !version.latest) return null;
+  return (
+    <div
+      className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--notice-border)] bg-[var(--notice-bg)] px-3 py-2.5 text-xs text-[var(--notice-text)]"
+      role="status"
+      aria-live="polite"
+      data-update-banner="true"
+    >
+      <div className="min-w-0">
+        <strong className="block text-sm text-[var(--strong)]">
+          发现新版本 v{version.latest}
+        </strong>
+        <p className="mt-0.5 text-[var(--muted)]">
+          当前 Runtime 为 v{version.current}。请手动下载并替换本地二进制，重启后生效。
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <a
+          className={`${secondaryButton} no-underline`}
+          href={version.release_url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <ExternalLink aria-hidden="true" size={14} />
+          打开最新 Release
+        </a>
+        <button className={secondaryButton} type="button" onClick={onDismiss}>
+          稍后提醒
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <AppErrorBoundary>
@@ -423,6 +478,8 @@ function AppShell() {
   const [connected, setConnected] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [version, setVersion] = useState(null);
+  const [dismissedUpdate, setDismissedUpdate] = useState(readDismissedUpdate);
   const [collapsedOwners, setCollapsedOwners] = useState(() => new Set());
   const [collapsedSessions, setCollapsedSessions] = useState(() => new Set());
   const signatureRef = useRef(null);
@@ -490,6 +547,42 @@ function AppShell() {
       window.clearTimeout(timer);
     };
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+
+    const loadVersion = async () => {
+      try {
+        const next = await getVersionStatus();
+        if (!cancelled && mountedRef.current) setVersion(next);
+      } catch (error) {
+        console.warn("version check failed:", error);
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(loadVersion, VERSION_POLL_MS);
+      }
+    };
+
+    loadVersion();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const visibleUpdate =
+    version?.update_available &&
+    version.latest &&
+    version.latest !== dismissedUpdate
+      ? version
+      : null;
+
+  const dismissUpdate = useCallback(() => {
+    if (!version?.latest) return;
+    writeDismissedUpdate(version.latest);
+    setDismissedUpdate(version.latest);
+  }, [version]);
 
   const closeSession = useCallback(
     async (id) => {
@@ -611,6 +704,11 @@ function AppShell() {
             <h1 className="mt-1 text-2xl leading-tight font-bold text-[var(--strong)] sm:text-[28px]">
               Grok 会话管理
             </h1>
+            {version?.current ? (
+              <p className="mt-1 text-[11px] text-[var(--faint)]">
+                Runtime v{version.current}
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3 max-sm:w-full max-sm:justify-between">
             <span
@@ -691,6 +789,8 @@ function AppShell() {
         </span>
         <span className="shrink-0">自动刷新：2 秒</span>
       </div>
+
+      <UpdateBanner version={visibleUpdate} onDismiss={dismissUpdate} />
 
       {notice ? (
         <div
