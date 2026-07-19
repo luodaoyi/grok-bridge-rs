@@ -14,6 +14,8 @@
 
 grok-build 让 Codex 可以稳定地在本机调用 Grok 完成真实的软件开发，不会为每次请求都留下难以管理的独立进程。它通过共享 Runtime 保持会话可见、可交互、按 Codex 对话归类，并能在浏览器中随时查看和关闭。
 
+WebUI 内置语言切换器，目前支持 13 种语言：English、简体中文、繁體中文、日本語、한국어、Русский、Español、Français、Deutsch、Bahasa Indonesia、ไทย、Tiếng Việt 和 العربية。首次访问时会跟随浏览器语言，选择的语言会保存在本地；阿拉伯语界面会使用从右到左（RTL）的布局。
+
 ## 为什么使用它？
 
 当 Codex 把任务交给 Grok 时，你不应该还要猜测某个进程属于哪个任务、现在是否仍在工作。grok-build 把这套流程集中到一个地方：
@@ -65,6 +67,42 @@ bridge="$HOME/.agents/skills/grok-build/bin/linux-x86_64/grok-bridge"
 需要时，将二进制目录替换为 `windows-arm64`、`linux-arm64`、`macos-x86_64` 或 `macos-arm64`。`server ui` 会按需启动本地 Runtime 并打开浏览器面板，默认地址是 `http://127.0.0.1:47653`。
 
 安装 Skill 后，Codex 就可以直接使用它。需要了解每个 Grok 会话在做什么，或想手工接管时，再打开这个面板即可。
+
+## 让 Agent 自动安装或更新 Skill
+
+你可以让 Claude Code、Codex 或 OpenCode 自动安装或更新这个 Skill。下面的提示词会要求 Agent 先检查自己的 Skill 发现规则，而不是直接套用其他工具的目录。将 `[宿主 Agent]` 替换为 `Claude Code`、`Codex` 或 `OpenCode`。
+
+### 一次性安装提示词
+
+```text
+你是[宿主 Agent]。请从官方最新 GitHub Release 安装 grok-build Agent Skill：https://github.com/luodaoyi/grok-bridge-rs/releases/latest
+
+先检查当前宿主 Agent 的 Skill 发现规则，选择正确的用户级 Skill 目录；不要套用其他 Agent 的目录约定。将解压后的文件夹安装为 grok-build/，并保留其中的 SKILL.md、agents/openai.yaml、hooks/ 和当前平台对应的 bin/ 文件。检测当前操作系统和 CPU 架构，但使用 Release 压缩包中已有的原生二进制。
+
+下载 Release ZIP 及对应的 .sha256 文件，先校验 SHA-256，再解压；校验失败就停止。不要安装 Grok CLI，不要使用 sudo 或管理员权限，不要运行远程脚本，不要修改当前项目或其他无关 Skill。如果已有 grok-build 安装，请保留该 Skill 目录之外的所有文件，并在替换前报告现有路径及其中的自定义文件。
+
+安装完成后，使用当前平台的二进制运行随包提供的 grok-bridge doctor 和 grok-bridge hooks install。除非我要求，不要启动 WebUI。报告准确的 Skill 路径、Release tag、平台二进制、校验结果和命令结果。不要 commit、push 或发布任何内容。
+```
+
+宿主 Agent 对应的第一行：
+
+- Claude Code：`你是 Claude Code。请安装 grok-build Agent Skill……`
+- Codex：`你是 Codex。请安装 grok-build Agent Skill……`
+- OpenCode：`你是 OpenCode。请安装 grok-build Agent Skill……`
+
+### 更新或升级提示词
+
+```text
+你是[宿主 Agent]。请从最新官方 Release 更新已安装的 grok-build Agent Skill：https://github.com/luodaoyi/grok-bridge-rs/releases/latest
+
+按照当前宿主 Agent 的 Skill 发现规则找到正在生效的 grok-build 安装，并先报告路径及可识别的当前 Release。先检查最新 Release tag；如果当前已经是最新版本，不要重复安装。否则下载 Release ZIP 及对应的 .sha256 文件，先校验 SHA-256，再解压，并选择当前操作系统和 CPU 架构对应的原生二进制。
+
+先准备并校验新的文件，再切换替换。只替换 grok-build Skill，保留其他 Skill 以及该目录之外的文件；如果现有 Skill 目录内有自定义文件，先停止覆盖并报告这些文件。切换后运行新版本的 grok-bridge doctor 和 grok-bridge hooks install。除非我明确要求，不要安装 Grok CLI，不要使用 sudo 或管理员权限，不要运行远程脚本，不要修改当前项目，不要启动 WebUI，不要 commit、push 或发布任何内容。
+
+报告旧版和新版 Release tag、Skill 路径、平台二进制、校验结果、保留的自定义文件及命令结果。如果下载、校验或替换无法安全完成，保持当前安装不变并说明原因。
+```
+
+这些提示词会让安装过程适配宿主 Agent，同时保持 grok-build 本身为本地 Skill。安装完成后，使用宿主 Agent 的常规 Skill 语法调用；在 Codex 中使用 `$grok-build`。
 
 ## 日常使用
 
