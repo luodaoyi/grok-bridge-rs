@@ -1,3 +1,4 @@
+import { useI18n } from "../i18n/index.js";
 import {
   activityLabel,
   clientLifecycle,
@@ -21,24 +22,26 @@ const lifecycleClass = {
 };
 
 export function ActivityBadge({ activity, phase, className = "" }) {
+  const { t } = useI18n();
   return (
     <span
-      className={`badge ${activityClass[activity] ?? activityClass.unknown} inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tracking-tight ${className}`}
-      title={phase ? `PTY 阶段：${phase}` : undefined}
+      className={`badge ${activityClass[activity] ?? activityClass.unknown} inline-flex max-w-full shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tracking-tight break-words ${className}`}
+      title={phase ? t("badge.phase", { phase }) : undefined}
     >
-      {activityLabel(activity)}
+      {activityLabel(activity, t)}
     </span>
   );
 }
 
 export function LifecycleBadge({ clientState, className = "" }) {
+  const { t } = useI18n();
   const lifecycle = clientLifecycle(clientState);
   return (
     <span
-      className={`badge ${lifecycleClass[lifecycle] ?? lifecycleClass.unknown} inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tracking-tight ${className}`}
-      title={clientLifecycleLabel(clientState)}
+      className={`badge ${lifecycleClass[lifecycle] ?? lifecycleClass.unknown} inline-flex max-w-full shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tracking-tight break-words ${className}`}
+      title={clientLifecycleLabel(clientState, t)}
     >
-      {clientLifecycleLabel(clientState)}
+      {clientLifecycleLabel(clientState, t)}
     </span>
   );
 }

@@ -11,12 +11,14 @@ export class MockXTerm {
     this.rows = options.rows ?? 24;
     this.cols = options.cols ?? 80;
     this.written = [];
-    /** Ordered operation log: ['write', data] | ['reset'] */
+    /** Ordered operation log: ['write', data] | ['reset'] | ['resize', cols, rows] */
     this.ops = [];
     this.resetCount = 0;
     this.disposed = false;
     this.opened = false;
     this.handlers = { data: [], key: [] };
+    this.addons = [];
+    this._host = null;
     /** When true, write callbacks are queued until flushWriteCallback(s). */
     this.holdWriteCallbacks = false;
     /** @type {Array<() => void>} */
@@ -24,14 +26,18 @@ export class MockXTerm {
     MockXTerm.instances.push(this);
   }
 
-  open() {
+  open(host) {
     this.opened = true;
+    this._host = host ?? null;
   }
 
-  /**
-   * Mirrors xterm write(data, callback): parser work is async relative to
-   * callers; callback fires when that write is complete.
-   */
+  loadAddon(addon) {
+    this.addons.push(addon);
+    if (addon && typeof addon.activate === "function") {
+      addon.activate(this);
+    }
+  }
+
   write(data, callback) {
     this.written.push(data);
     this.ops.push(["write", data]);
@@ -40,17 +46,14 @@ export class MockXTerm {
       this.pendingCallbacks.push(callback);
       return;
     }
-    // Default: complete synchronously so existing tests stay simple.
     callback();
   }
 
-  /** Fire the oldest pending write callback (FIFO). */
   flushWriteCallback() {
     const callback = this.pendingCallbacks.shift();
     if (callback) callback();
   }
 
-  /** Fire all pending write callbacks in order. */
   flushAllWriteCallbacks() {
     while (this.pendingCallbacks.length > 0) {
       this.flushWriteCallback();
@@ -66,21 +69,47 @@ export class MockXTerm {
   resize(cols, rows) {
     this.cols = cols;
     this.rows = rows;
+    this.ops.push(["resize", cols, rows]);
   }
 
   dispose() {
     this.disposed = true;
+    this.handlers.data = [];
+    this.handlers.key = [];
+    for (const addon of this.addons) {
+      if (addon && typeof addon.dispose === "function") {
+        try {
+          addon.dispose();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
 
-  // Intentionally no real event system — tests assert these are never used.
   onData(handler) {
     this.handlers.data.push(handler);
-    return { dispose() {} };
+    return {
+      dispose: () => {
+        this.handlers.data = this.handlers.data.filter((h) => h !== handler);
+      },
+    };
   }
 
   onKey(handler) {
     this.handlers.key.push(handler);
-    return { dispose() {} };
+    return {
+      dispose: () => {
+        this.handlers.key = this.handlers.key.filter((h) => h !== handler);
+      },
+    };
+  }
+
+  /** Test helper: fire onData as xterm would for typed/pasted text. */
+  emitData(data) {
+    for (const handler of [...this.handlers.data]) {
+      handler(data);
+    }
   }
 }
 

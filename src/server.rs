@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -22,7 +22,8 @@ use tungstenite::{
 use crate::{
     protocol::{
         Request, ResponseEnvelope, ResponseResult, ServerInfo, decode_request, decode_write_data,
-        validate_client_session_id, validate_owner,
+        validate_client_session_id, validate_owner, validate_session_handle,
+        validate_terminal_size,
     },
     session::{OrphanPolicy, SessionHost},
     transport::{call_anonymous, read_frame, runtime_name, write_response},
@@ -31,6 +32,14 @@ use crate::{
 
 /// Bound WebSocket text/binary payload size (server and client).
 const WEB_EVENTS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Max idle sleep between client-frame polls so interactive keys stay low-latency.
+/// Host Condvar still wakes immediately on session revisions.
+const WEB_EVENTS_CLIENT_POLL: Duration = Duration::from_millis(25);
+/// Refresh every managed Codex lease while a WebUI event socket remains live.
+/// This stays well below the minimum configurable 30-second lease.
+const WEB_EVENTS_LEASE_REFRESH: Duration = Duration::from_secs(10);
+/// Cap inbound request-id length for WebUI command frames.
+const WEB_EVENTS_MAX_REQUEST_ID_BYTES: usize = 128;
 
 pub(crate) fn run() -> Result<()> {
     let name = runtime_name()?;
@@ -583,6 +592,10 @@ fn handle_events_websocket(
 }
 
 fn run_events_websocket(websocket: &mut WebSocket<TcpStream>, state: &RuntimeState) {
+    if let Err(error) = state.host.touch_web_clients() {
+        eprintln!("grok-bridge server: WebUI lease refresh failed: {error:#}");
+    }
+    let mut next_lease_refresh = Instant::now() + WEB_EVENTS_LEASE_REFRESH;
     let mut cursors = HashMap::new();
     let mut seen_revision = state.host.revision();
     if !send_web_events(websocket, state, &mut cursors, true) {
@@ -590,24 +603,39 @@ fn run_events_websocket(websocket: &mut WebSocket<TcpStream>, state: &RuntimeSta
     }
 
     while !state.stopping.load(Ordering::Acquire) {
+        if Instant::now() >= next_lease_refresh {
+            if let Err(error) = state.host.touch_web_clients() {
+                eprintln!("grok-bridge server: WebUI lease refresh failed: {error:#}");
+            }
+            next_lease_refresh = Instant::now() + WEB_EVENTS_LEASE_REFRESH;
+        }
+        // Service inbound terminal_input / terminal_resize before sleeping so
+        // interactive keystrokes never wait behind a multi-second idle timeout.
+        match poll_websocket_client(websocket, state) {
+            WsClientAction::Continue => {}
+            WsClientAction::Close => return,
+        }
+
         let now = now_millis();
         let lease_deadline = state
             .host
             .next_client_lifecycle_deadline_ms()
             .ok()
             .flatten();
-        // Sleep until the next real host revision *or* the next pure-time lease
-        // transition. Cap only so stopping is observed; timeouts without either
-        // signal never push frames.
+        // Sleep until the next host revision *or* the next pure-time lease
+        // transition, but never longer than WEB_EVENTS_CLIENT_POLL so client
+        // frames stay low-latency. Timeouts without a revision/lease signal
+        // never push frames.
         let wait = match lease_deadline {
             Some(deadline) if deadline > now => Duration::from_millis(deadline - now)
                 .min(Duration::from_secs(30))
-                .max(Duration::from_millis(1)),
+                .max(Duration::from_millis(1))
+                .min(WEB_EVENTS_CLIENT_POLL),
             Some(_) => Duration::from_millis(1),
-            None => Duration::from_secs(5),
+            None => WEB_EVENTS_CLIENT_POLL,
         };
         let current = state.host.wait_revision(seen_revision, wait);
-        match poll_websocket_client(websocket) {
+        match poll_websocket_client(websocket, state) {
             WsClientAction::Continue => {}
             WsClientAction::Close => return,
         }
@@ -689,7 +717,10 @@ enum WsClientAction {
     Close,
 }
 
-fn poll_websocket_client(websocket: &mut WebSocket<TcpStream>) -> WsClientAction {
+fn poll_websocket_client(
+    websocket: &mut WebSocket<TcpStream>,
+    state: &RuntimeState,
+) -> WsClientAction {
     // Drain a bounded number of control/application frames so a noisy client
     // cannot pin this connection thread forever.
     for _ in 0..32 {
@@ -704,8 +735,13 @@ fn poll_websocket_client(websocket: &mut WebSocket<TcpStream>) -> WsClientAction
                 let _ = websocket.close(None);
                 return WsClientAction::Close;
             }
-            // Read-only stream: ignore application data; never forward to PTY.
-            Ok(Message::Text(_)) | Ok(Message::Binary(_)) | Ok(Message::Frame(_)) => {}
+            Ok(Message::Text(text)) => {
+                if handle_web_events_client_text(websocket, state, text.as_str()).is_err() {
+                    return WsClientAction::Close;
+                }
+            }
+            // Binary frames are not part of the JSON command protocol.
+            Ok(Message::Binary(_)) | Ok(Message::Frame(_)) => {}
             Err(tungstenite::Error::Io(error))
                 if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
             {
@@ -720,6 +756,252 @@ fn poll_websocket_client(websocket: &mut WebSocket<TcpStream>) -> WsClientAction
         }
     }
     WsClientAction::Continue
+}
+
+/// Client → server command on `/api/events` (JSON text only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WebEventsClientCommand {
+    TerminalInput {
+        id: Option<String>,
+        session: String,
+        data_base64: String,
+    },
+    TerminalResize {
+        id: Option<String>,
+        session: String,
+        cols: u16,
+        rows: u16,
+    },
+}
+
+/// Parse a single WebUI client command without panicking on junk.
+/// Unknown types yield `Ok(None)` (ignored). Malformed known types yield `Err`.
+fn parse_web_events_client_command(text: &str) -> Result<Option<WebEventsClientCommand>, String> {
+    if text.len() > WEB_EVENTS_MAX_MESSAGE_BYTES {
+        return Err("message exceeds size limit".to_owned());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("invalid JSON: {error}"))?;
+    let Some(object) = value.as_object() else {
+        return Err("message must be a JSON object".to_owned());
+    };
+    let message_type = object
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let id = match object.get("id") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value)) => {
+            if value.len() > WEB_EVENTS_MAX_REQUEST_ID_BYTES {
+                return Err("request id is too long".to_owned());
+            }
+            Some(value.clone())
+        }
+        Some(_) => return Err("request id must be a string".to_owned()),
+    };
+
+    match message_type {
+        "terminal_input" => {
+            let session = object
+                .get("session")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_owned();
+            validate_session_handle(&session).map_err(|error| format!("{error:#}"))?;
+            let data_base64 = object
+                .get("data_base64")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_owned();
+            if data_base64.is_empty() {
+                return Err("data_base64 is required".to_owned());
+            }
+            Ok(Some(WebEventsClientCommand::TerminalInput {
+                id,
+                session,
+                data_base64,
+            }))
+        }
+        "terminal_resize" => {
+            let session = object
+                .get("session")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_owned();
+            validate_session_handle(&session).map_err(|error| format!("{error:#}"))?;
+            let cols = object
+                .get("cols")
+                .and_then(|value| value.as_u64())
+                .ok_or_else(|| "cols is required".to_owned())?;
+            let rows = object
+                .get("rows")
+                .and_then(|value| value.as_u64())
+                .ok_or_else(|| "rows is required".to_owned())?;
+            let cols = u16::try_from(cols).map_err(|_| "cols out of range".to_owned())?;
+            let rows = u16::try_from(rows).map_err(|_| "rows out of range".to_owned())?;
+            Ok(Some(WebEventsClientCommand::TerminalResize {
+                id,
+                session,
+                cols,
+                rows,
+            }))
+        }
+        // Unknown / push-only types (e.g. future clients): ignore safely.
+        _ => Ok(None),
+    }
+}
+
+/// Apply a parsed command through SessionHost, reusing write_raw / resize.
+fn apply_web_events_client_command(
+    host: &SessionHost,
+    command: &WebEventsClientCommand,
+) -> Result<(), String> {
+    // An inbound command proves the WebUI is attached right now. Refresh before
+    // touching the PTY so a provisional orphan claim is canceled before input
+    // or resize is accepted.
+    host.touch_web_clients()
+        .map_err(|error| format!("{error:#}"))?;
+    match command {
+        WebEventsClientCommand::TerminalInput {
+            session,
+            data_base64,
+            ..
+        } => {
+            let data = decode_write_data(data_base64).map_err(|error| format!("{error:#}"))?;
+            host.write_raw(session, data)
+                .map(|_| ())
+                .map_err(|error| format!("{error:#}"))
+        }
+        WebEventsClientCommand::TerminalResize {
+            session,
+            cols,
+            rows,
+            ..
+        } => {
+            validate_terminal_size(*cols, *rows).map_err(|error| format!("{error:#}"))?;
+            host.resize(session, *cols, *rows)
+                .map(|_| ())
+                .map_err(|error| format!("{error:#}"))
+        }
+    }
+}
+
+fn web_events_result_type(command: &WebEventsClientCommand) -> &'static str {
+    match command {
+        WebEventsClientCommand::TerminalInput { .. } => "input_result",
+        WebEventsClientCommand::TerminalResize { .. } => "resize_result",
+    }
+}
+
+fn web_events_command_session(command: &WebEventsClientCommand) -> &str {
+    match command {
+        WebEventsClientCommand::TerminalInput { session, .. }
+        | WebEventsClientCommand::TerminalResize { session, .. } => session.as_str(),
+    }
+}
+
+fn web_events_command_id(command: &WebEventsClientCommand) -> Option<&str> {
+    match command {
+        WebEventsClientCommand::TerminalInput { id, .. }
+        | WebEventsClientCommand::TerminalResize { id, .. } => id.as_deref(),
+    }
+}
+
+/// Build a result envelope that never collides with `{ type: "sessions" }` push frames.
+fn build_web_events_command_result(
+    result_type: &str,
+    id: Option<&str>,
+    session: Option<&str>,
+    ok: bool,
+    error: Option<&str>,
+) -> String {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "type".to_owned(),
+        serde_json::Value::String(result_type.to_owned()),
+    );
+    map.insert("ok".to_owned(), serde_json::Value::Bool(ok));
+    if let Some(id) = id {
+        map.insert("id".to_owned(), serde_json::Value::String(id.to_owned()));
+    }
+    if let Some(session) = session {
+        map.insert(
+            "session".to_owned(),
+            serde_json::Value::String(session.to_owned()),
+        );
+    }
+    if let Some(error) = error {
+        map.insert(
+            "error".to_owned(),
+            serde_json::Value::String(error.to_owned()),
+        );
+    }
+    serde_json::Value::Object(map).to_string()
+}
+
+fn send_web_events_command_result(
+    websocket: &mut WebSocket<TcpStream>,
+    result_type: &str,
+    id: Option<&str>,
+    session: Option<&str>,
+    ok: bool,
+    error: Option<&str>,
+) -> Result<(), ()> {
+    let payload = build_web_events_command_result(result_type, id, session, ok, error);
+    if payload.len() > WEB_EVENTS_MAX_MESSAGE_BYTES {
+        return Err(());
+    }
+    websocket
+        .send(Message::text(payload))
+        .and_then(|()| websocket.flush())
+        .map_err(|_| ())
+}
+
+fn handle_web_events_client_text(
+    websocket: &mut WebSocket<TcpStream>,
+    state: &RuntimeState,
+    text: &str,
+) -> Result<(), ()> {
+    match parse_web_events_client_command(text) {
+        Ok(None) => Ok(()),
+        Ok(Some(command)) => match apply_web_events_client_command(&state.host, &command) {
+            Ok(()) => {
+                // Success is silent for terminal_input (high frequency). Resize
+                // still gets a positive ack so the UI can confirm PTY apply.
+                if matches!(command, WebEventsClientCommand::TerminalResize { .. }) {
+                    send_web_events_command_result(
+                        websocket,
+                        web_events_result_type(&command),
+                        web_events_command_id(&command),
+                        Some(web_events_command_session(&command)),
+                        true,
+                        None,
+                    )?;
+                }
+                Ok(())
+            }
+            Err(error) => send_web_events_command_result(
+                websocket,
+                web_events_result_type(&command),
+                web_events_command_id(&command),
+                Some(web_events_command_session(&command)),
+                false,
+                Some(&error),
+            ),
+        },
+        Err(error) => {
+            // Malformed known-shape or generic junk that failed parse: never
+            // touch PTY; return a generic input_result when possible.
+            send_web_events_command_result(
+                websocket,
+                "input_result",
+                None,
+                None,
+                false,
+                Some(&error),
+            )
+        }
+    }
 }
 
 fn validate_events_websocket_request(request: &ParsedHttpRequest) -> Result<(), String> {
@@ -1241,6 +1523,185 @@ mod tests {
             b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:47653\r\nOrigin: http://127.0.0.1:47653\r\n\r\n",
         );
         assert!(response.starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
+    }
+
+    #[test]
+    fn parse_terminal_input_and_resize_commands() {
+        let input = parse_web_events_client_command(
+            r#"{"type":"terminal_input","id":"r1","session":"gbt-1","data_base64":"YQ=="}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            input,
+            WebEventsClientCommand::TerminalInput {
+                id: Some("r1".to_owned()),
+                session: "gbt-1".to_owned(),
+                data_base64: "YQ==".to_owned(),
+            }
+        );
+
+        let resize = parse_web_events_client_command(
+            r#"{"type":"terminal_resize","id":"r2","session":"gbt-1","cols":120,"rows":40}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            resize,
+            WebEventsClientCommand::TerminalResize {
+                id: Some("r2".to_owned()),
+                session: "gbt-1".to_owned(),
+                cols: 120,
+                rows: 40,
+            }
+        );
+
+        // Unknown types are ignored (push-only / future).
+        assert_eq!(
+            parse_web_events_client_command(r#"{"type":"sessions","sessions":[]}"#).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_rejects_malformed_and_oversized_input_without_command() {
+        assert!(parse_web_events_client_command("not-json").is_err());
+        assert!(
+            parse_web_events_client_command(
+                r#"{"type":"terminal_input","session":"","data_base64":"YQ=="}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_web_events_client_command(r#"{"type":"terminal_input","session":"gbt-1"}"#)
+                .is_err()
+        );
+        assert!(
+            parse_web_events_client_command(
+                r#"{"type":"terminal_resize","session":"gbt-1","cols":1,"rows":40}"#
+            )
+            .is_ok()
+        );
+        // cols=1 is parsed; apply-time validate_terminal_size rejects it.
+        let cmd = parse_web_events_client_command(
+            r#"{"type":"terminal_resize","session":"gbt-1","cols":1,"rows":40}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let host = SessionHost::new(OrphanPolicy {
+            lease_ms: 120_000,
+            grace_ms: 600_000,
+        });
+        assert!(apply_web_events_client_command(&host, &cmd).is_err());
+    }
+
+    #[test]
+    fn apply_terminal_input_uses_decode_write_data_and_rejects_unknown_session() {
+        let host = SessionHost::new(OrphanPolicy {
+            lease_ms: 120_000,
+            grace_ms: 600_000,
+        });
+        // Exact raw bytes for "A" (0x41) via standard base64.
+        let cmd = WebEventsClientCommand::TerminalInput {
+            id: Some("n1".to_owned()),
+            session: "missing-session".to_owned(),
+            data_base64: "QQ==".to_owned(),
+        };
+        let data = decode_write_data("QQ==").unwrap();
+        assert_eq!(data, vec![0x41]);
+        // Unknown session: error, never panics, never writes.
+        let err = apply_web_events_client_command(&host, &cmd).unwrap_err();
+        assert!(!err.is_empty());
+
+        // Empty / oversized rejected by decode_write_data before host write.
+        let empty = WebEventsClientCommand::TerminalInput {
+            id: None,
+            session: "missing-session".to_owned(),
+            data_base64: "".to_owned(),
+        };
+        // Empty base64 fails at parse (required).
+        assert!(
+            parse_web_events_client_command(
+                r#"{"type":"terminal_input","session":"s","data_base64":""}"#
+            )
+            .is_err()
+        );
+        let _ = empty;
+
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        let oversize = BASE64.encode(vec![0x5a; crate::protocol::MAX_WRITE_BYTES + 1]);
+        let over = WebEventsClientCommand::TerminalInput {
+            id: None,
+            session: "missing-session".to_owned(),
+            data_base64: oversize,
+        };
+        assert!(apply_web_events_client_command(&host, &over).is_err());
+    }
+
+    #[test]
+    fn command_result_json_is_not_sessions_type() {
+        let payload = build_web_events_command_result(
+            "input_result",
+            Some("r1"),
+            Some("gbt-1"),
+            false,
+            Some("nope"),
+        );
+        let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(value["type"], "input_result");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["id"], "r1");
+        assert_eq!(value["session"], "gbt-1");
+        assert_eq!(value["error"], "nope");
+        assert!(value.get("sessions").is_none());
+        assert!(value.get("terminals").is_none());
+    }
+
+    #[test]
+    fn client_poll_interval_is_bounded_for_interactive_latency() {
+        // Guard against regressions that reintroduce multi-second waits before
+        // reading client frames.
+        assert!(WEB_EVENTS_CLIENT_POLL <= Duration::from_millis(100));
+        assert!(WEB_EVENTS_CLIENT_POLL >= Duration::from_millis(1));
+        assert!(WEB_EVENTS_LEASE_REFRESH < Duration::from_secs(30));
+        assert!(WEB_EVENTS_LEASE_REFRESH >= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn parse_rejects_invalid_session_handles_before_host_touch() {
+        let long = "x".repeat(200);
+        let bad_cases = [
+            "",
+            "has space",
+            "bad/id",
+            long.as_str(),
+            "ctrl\n",
+            "unicode-\u{4e2d}",
+        ];
+        for bad in bad_cases {
+            let payload = format!(
+                r#"{{"type":"terminal_input","session":{session},"data_base64":"YQ=="}}"#,
+                session = serde_json::to_string(bad).unwrap()
+            );
+            let err = parse_web_events_client_command(&payload).unwrap_err();
+            assert!(
+                err.contains("session handle") || err.contains("session"),
+                "bad={bad:?} err={err}"
+            );
+            let resize = format!(
+                r#"{{"type":"terminal_resize","session":{session},"cols":80,"rows":24}}"#,
+                session = serde_json::to_string(bad).unwrap()
+            );
+            assert!(parse_web_events_client_command(&resize).is_err());
+        }
+        // Valid handle shape is accepted by the parser (host still enforces existence).
+        assert!(
+            parse_web_events_client_command(
+                r#"{"type":"terminal_input","session":"gbt-1","data_base64":"YQ=="}"#
+            )
+            .unwrap()
+            .is_some()
+        );
     }
 
     #[test]

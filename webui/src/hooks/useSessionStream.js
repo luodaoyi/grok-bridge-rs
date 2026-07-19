@@ -3,6 +3,7 @@ import {
   eventsWebSocketUrl,
   normalizeEventsMessage,
 } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 import { sessionsSignature } from "../sessions.js";
 import { WS_BACKOFF_MS } from "../utils/constants.js";
 import { errorMessage } from "../utils/errors.js";
@@ -13,7 +14,31 @@ import {
 
 /** @typedef {'initial' | 'connected' | 'disconnected' | 'retrying'} ConnectionState */
 
+/** Stable client-side I/O error codes (never shown raw in the UI). */
+export const CLIENT_IO_ERROR = Object.freeze({
+  DISCONNECTED: "disconnected",
+  INVALID_PAYLOAD: "invalid_payload",
+  SEND_FAILED: "send_failed",
+});
+
+const CLIENT_IO_ERROR_KEYS = Object.freeze({
+  [CLIENT_IO_ERROR.DISCONNECTED]: "interactive.disconnected",
+  [CLIENT_IO_ERROR.INVALID_PAYLOAD]: "interactive.invalidPayload",
+  [CLIENT_IO_ERROR.SEND_FAILED]: "interactive.sendFailed",
+});
+
+let requestSeq = 0;
+
+function nextRequestId() {
+  requestSeq += 1;
+  return `webui-${requestSeq}`;
+}
+
 export function useSessionStream({ setNotice } = {}) {
+  const { t } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
+
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [connectionState, setConnectionState] = useState(
@@ -24,26 +49,124 @@ export function useSessionStream({ setNotice } = {}) {
   const loadingRef = useRef(false);
   const mountedRef = useRef(true);
   const reconnectRef = useRef(() => {});
+  /** @type {import('react').MutableRefObject<WebSocket | null>} */
+  const socketRef = useRef(null);
 
   const clearStreamError = useCallback(() => {
     if (!setNotice) return;
     setNotice((current) =>
-      current?.tone === "error" &&
-      String(current.text || "").startsWith("实时通道")
-        ? null
-        : current,
+      current?.tone === "error" && current?.kind === "stream" ? null : current,
     );
   }, [setNotice]);
 
   const reportStreamError = useCallback(
     (error) => {
       if (!setNotice) return;
+      const translate = tRef.current;
       setNotice({
         tone: "error",
-        text: `实时通道异常：${errorMessage(error)}（将自动重试）`,
+        kind: "stream",
+        text: translate("stream.error", {
+          detail: errorMessage(error, translate),
+        }),
       });
     },
     [setNotice],
+  );
+
+  /** Map a stable client error code to a fully localized Notice (no English leak). */
+  const reportClientIoError = useCallback(
+    (code) => {
+      if (!setNotice) return;
+      const translate = tRef.current;
+      const key =
+        CLIENT_IO_ERROR_KEYS[code] ?? "interactive.unavailable";
+      setNotice({
+        tone: "error",
+        kind: "input",
+        text: translate(key),
+      });
+    },
+    [setNotice],
+  );
+
+  /**
+   * Backend input_result / resize_result detail may stay after the localized
+   * prefix from interactive.error.
+   */
+  const reportBackendIoError = useCallback(
+    (detail) => {
+      if (!setNotice) return;
+      const translate = tRef.current;
+      setNotice({
+        tone: "error",
+        kind: "input",
+        text: translate("interactive.error", {
+          detail: detail || translate("error.unknown"),
+        }),
+      });
+    },
+    [setNotice],
+  );
+
+  /**
+   * Send a JSON command on the live events socket.
+   * Never buffers: if the socket is not OPEN, fails immediately.
+   * @returns {{ ok: true, id: string } | { ok: false, error: string }}
+   *   `error` is a stable CLIENT_IO_ERROR code, never a free-form English string.
+   */
+  const sendClientCommand = useCallback((message) => {
+    const ws = socketRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return { ok: false, error: CLIENT_IO_ERROR.DISCONNECTED };
+    }
+    const id = message.id || nextRequestId();
+    const payload = { ...message, id };
+    try {
+      ws.send(JSON.stringify(payload));
+      return { ok: true, id };
+    } catch {
+      return { ok: false, error: CLIENT_IO_ERROR.SEND_FAILED };
+    }
+  }, []);
+
+  const sendTerminalInput = useCallback(
+    (session, dataBase64) => {
+      if (!session || !dataBase64) {
+        reportClientIoError(CLIENT_IO_ERROR.INVALID_PAYLOAD);
+        return { ok: false, error: CLIENT_IO_ERROR.INVALID_PAYLOAD };
+      }
+      const result = sendClientCommand({
+        type: "terminal_input",
+        session,
+        data_base64: dataBase64,
+      });
+      if (!result.ok) {
+        reportClientIoError(result.error);
+      }
+      return result;
+    },
+    [reportClientIoError, sendClientCommand],
+  );
+
+  const sendTerminalResize = useCallback(
+    (session, cols, rows) => {
+      if (!session) {
+        reportClientIoError(CLIENT_IO_ERROR.INVALID_PAYLOAD);
+        return { ok: false, error: CLIENT_IO_ERROR.INVALID_PAYLOAD };
+      }
+      const result = sendClientCommand({
+        type: "terminal_resize",
+        session,
+        cols,
+        rows,
+      });
+      if (!result.ok) {
+        reportClientIoError(result.error);
+      }
+      return result;
+    },
+    [reportClientIoError, sendClientCommand],
   );
 
   useEffect(() => {
@@ -61,13 +184,7 @@ export function useSessionStream({ setNotice } = {}) {
       }
     };
 
-    const applyMessage = (rawText) => {
-      let parsed;
-      try {
-        parsed = JSON.parse(rawText);
-      } catch (error) {
-        throw new Error(`invalid events JSON: ${error?.message || error}`);
-      }
+    const applySessionsMessage = (parsed) => {
       const message = normalizeEventsMessage(parsed);
       if (!mountedRef.current || cancelled) return;
 
@@ -83,6 +200,31 @@ export function useSessionStream({ setNotice } = {}) {
       );
       setLastUpdated(new Date());
       clearStreamError();
+    };
+
+    const applyMessage = (rawText) => {
+      let parsed;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch (error) {
+        throw new Error(`invalid events JSON: ${error?.message || error}`);
+      }
+
+      // Command results must not go through sessions normalization.
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        (parsed.type === "input_result" || parsed.type === "resize_result")
+      ) {
+        if (parsed.ok === false) {
+          reportBackendIoError(
+            typeof parsed.error === "string" ? parsed.error : null,
+          );
+        }
+        return;
+      }
+
+      applySessionsMessage(parsed);
     };
 
     const scheduleReconnect = () => {
@@ -118,6 +260,7 @@ export function useSessionStream({ setNotice } = {}) {
           /* ignore close races */
         }
         socket = null;
+        socketRef.current = null;
       }
 
       if (mountedRef.current) {
@@ -133,11 +276,13 @@ export function useSessionStream({ setNotice } = {}) {
         return;
       }
       socket = ws;
+      socketRef.current = ws;
 
       ws.onopen = () => {
         if (cancelled || socket !== ws) return;
         everConnected = true;
         attempt = 0;
+        socketRef.current = ws;
         if (mountedRef.current) setConnectionState("connected");
         clearStreamError();
       };
@@ -159,8 +304,9 @@ export function useSessionStream({ setNotice } = {}) {
       ws.onclose = () => {
         if (cancelled || socket !== ws) return;
         socket = null;
+        if (socketRef.current === ws) socketRef.current = null;
         if (mountedRef.current) {
-          setConnectionState(everConnected ? "disconnected" : "disconnected");
+          setConnectionState("disconnected");
         }
         scheduleReconnect();
       };
@@ -183,6 +329,7 @@ export function useSessionStream({ setNotice } = {}) {
       mountedRef.current = false;
       clearRetry();
       reconnectRef.current = () => {};
+      socketRef.current = null;
       if (socket) {
         try {
           socket.onopen = null;
@@ -196,7 +343,7 @@ export function useSessionStream({ setNotice } = {}) {
         socket = null;
       }
     };
-  }, [clearStreamError, reportStreamError]);
+  }, [clearStreamError, reportBackendIoError, reportStreamError]);
 
   const reconnect = useCallback(() => {
     reconnectRef.current();
@@ -211,5 +358,7 @@ export function useSessionStream({ setNotice } = {}) {
     reconnect,
     loadingRef,
     setLoading,
+    sendTerminalInput,
+    sendTerminalResize,
   };
 }

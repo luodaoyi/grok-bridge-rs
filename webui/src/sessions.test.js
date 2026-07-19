@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { createTranslator, formatCountdown, formatDurationMs } from "./i18n/index.js";
 import {
   activityOf,
+  activityLabel,
+  ageLabel,
   clientLifecycle,
+  clientLifecycleLabel,
+  clientStateLabel,
+  countdownLabel,
   dominantClientState,
+  durationMsLabel,
   groupSessions,
   groupSummary,
+  lifecycleCollapsedSummary,
+  lifecycleHintModel,
+  lifecyclePolicyText,
+  optionalDurationMs,
   ownerKey,
+  remainingLabel,
   sessionGroupKey,
   sessionStats,
 } from "./sessions.js";
@@ -73,7 +85,34 @@ describe("session grouping", () => {
       waiting: 1,
       done: 1,
     });
-    expect(groupSummary(groupSessions(sessions)[1][1])).toBe("1 个等待输入");
+    const tZh = createTranslator("zh-CN");
+    expect(groupSummary(groupSessions(sessions)[1][1], tZh, "zh-CN")).toBe(
+      "1 个等待输入",
+    );
+    const tEn = createTranslator("en");
+    expect(groupSummary(groupSessions(sessions)[1][1], tEn, "en")).toBe(
+      "1 waiting",
+    );
+  });
+});
+
+describe("localized labels and times", () => {
+  it("localizes activity, client, and lifecycle labels", () => {
+    const tZh = createTranslator("zh-CN");
+    const tEn = createTranslator("en");
+    expect(activityLabel("working", tZh)).toBe("工作中");
+    expect(activityLabel("working", tEn)).toBe("Working");
+    expect(clientStateLabel("connected", tZh)).toBe("Codex 在线");
+    expect(clientLifecycleLabel("orphaned", tZh)).toBe("清理倒计时");
+    expect(clientLifecycleLabel("orphaned", tEn)).toBe("Cleanup countdown");
+  });
+
+  it("formats age and remaining with Intl", () => {
+    const now = Date.now();
+    expect(ageLabel(now - 5_000, now, "en")).toMatch(/second|sec|秒/i);
+    expect(remainingLabel(now + 120_000, now, "en")).toMatch(
+      /minute|min|分/i,
+    );
   });
 });
 
@@ -100,5 +139,117 @@ describe("client lifecycle", () => {
         { client_state: "unmanaged" },
       ]),
     ).toBe("connected");
+  });
+});
+
+describe("lifecycle hint model", () => {
+  const t = createTranslator("en");
+
+  it("returns none for unmanaged and never fabricates durations", () => {
+    expect(lifecycleHintModel({ client_state: "unmanaged" })).toEqual({
+      kind: "none",
+    });
+    expect(optionalDurationMs(undefined)).toBeNull();
+    expect(optionalDurationMs(null)).toBeNull();
+    expect(optionalDurationMs(-1)).toBeNull();
+    expect(optionalDurationMs(120_000)).toBe(120_000);
+    expect(durationMsLabel(undefined)).toBeNull();
+    expect(formatDurationMs(120_000, "en")).toMatch(/2|minute|min/i);
+  });
+
+  it("models connected with optional wire lease/grace only", () => {
+    expect(
+      lifecycleHintModel({
+        client_state: "connected",
+        client_lease_ms: 120_000,
+        orphan_grace_ms: 600_000,
+      }),
+    ).toEqual({
+      kind: "connected",
+      leaseMs: 120_000,
+      graceMs: 600_000,
+    });
+    expect(lifecycleHintModel({ client_state: "connected" })).toEqual({
+      kind: "connected",
+      leaseMs: null,
+      graceMs: null,
+    });
+    expect(
+      lifecyclePolicyText(
+        { kind: "connected", leaseMs: 120_000, graceMs: 600_000 },
+        t,
+        "en",
+      ),
+    ).toMatch(/lease|grace/i);
+    expect(
+      lifecyclePolicyText(
+        { kind: "connected", leaseMs: null, graceMs: null },
+        t,
+        "en",
+      ),
+    ).toBeNull();
+  });
+
+  it("models disconnected without a fixed deadline", () => {
+    expect(
+      lifecycleHintModel({
+        client_state: "disconnected",
+        client_lease_ms: 120_000,
+      }),
+    ).toEqual({
+      kind: "disconnected",
+      leaseMs: 120_000,
+      graceMs: null,
+    });
+  });
+
+  it("models orphaned deadline and second-precise countdown", () => {
+    const deadline = Date.now() + 90_500;
+    expect(
+      lifecycleHintModel({
+        client_state: "orphaned",
+        auto_close_at_ms: deadline,
+      }),
+    ).toEqual({ kind: "orphaned", deadlineMs: deadline });
+    const label = countdownLabel(deadline, Date.now(), "en");
+    expect(label).toMatch(/second/i);
+    expect(formatCountdown(deadline, Date.now() + 30_000, "en")).toMatch(
+      /second|minute/i,
+    );
+    expect(
+      lifecycleCollapsedSummary(
+        { client_state: "orphaned", auto_close_at_ms: deadline },
+        t,
+        "en",
+        Date.now(),
+      ),
+    ).toMatch(/Cleanup eligible in/i);
+    expect(
+      lifecycleCollapsedSummary(
+        { client_state: "orphaned", auto_close_at_ms: Date.now() - 1_000 },
+        t,
+        "en",
+        Date.now(),
+      ),
+    ).toMatch(/Waiting for Runtime cleanup/i);
+  });
+
+  it("models closing and collapsed risk summaries", () => {
+    expect(lifecycleHintModel({ client_state: "closing" })).toEqual({
+      kind: "closing",
+    });
+    expect(
+      lifecycleCollapsedSummary({ client_state: "closing" }, t, "en"),
+    ).toBe("Closing now");
+    expect(
+      lifecycleCollapsedSummary(
+        { client_state: "orphaned" },
+        t,
+        "en",
+      ),
+    ).toMatch(/Orphaned/i);
+    expect(
+      lifecycleCollapsedSummary({ client_state: "connected" }, t, "en"),
+    ).toBeNull();
   });
 });

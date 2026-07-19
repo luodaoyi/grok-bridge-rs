@@ -1,23 +1,26 @@
 import { MonitorCog, Moon, Sun } from "lucide-react";
 import { useTheme } from "../hooks/useTheme.js";
+import { useI18n } from "../i18n/index.js";
 
 const themeOptions = [
-  { value: "auto", label: "自动", Icon: MonitorCog },
-  { value: "light", label: "浅色", Icon: Sun },
-  { value: "dark", label: "深色", Icon: Moon },
+  { value: "auto", labelKey: "theme.auto", Icon: MonitorCog },
+  { value: "light", labelKey: "theme.light", Icon: Sun },
+  { value: "dark", labelKey: "theme.dark", Icon: Moon },
 ];
 
 export function ThemeSwitcher() {
   const { theme, setTheme } = useTheme();
+  const { t } = useI18n();
 
   return (
     <div
-      className="inline-flex rounded-lg border border-[var(--button-border)] bg-[var(--theme-control-bg)] p-0.5 shadow-[var(--shadow-sm)]"
+      className="inline-flex max-w-full flex-wrap rounded-lg border border-[var(--button-border)] bg-[var(--theme-control-bg)] p-0.5 shadow-[var(--shadow-sm)]"
       role="group"
-      aria-label="颜色主题"
+      aria-label={t("theme.aria")}
     >
-      {themeOptions.map(({ value, label, Icon }) => {
+      {themeOptions.map(({ value, labelKey, Icon }) => {
         const active = theme === value;
+        const label = t(labelKey);
         return (
           <button
             key={value}
@@ -28,7 +31,7 @@ export function ThemeSwitcher() {
                 : "text-[var(--muted)] hover:text-[var(--text)]"
             }`}
             aria-pressed={active}
-            title={`${label}主题`}
+            title={t("theme.title", { label })}
             onClick={() => setTheme(value)}
           >
             <Icon aria-hidden="true" size={13} strokeWidth={2} />

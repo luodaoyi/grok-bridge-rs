@@ -207,6 +207,10 @@ impl SessionHost {
     }
 
     pub(crate) fn touch_client(&self, client_session_id: &str) -> Result<()> {
+        self.touch_client_at(client_session_id, now_millis())
+    }
+
+    fn touch_client_at(&self, client_session_id: &str, now: u64) -> Result<()> {
         validate_client_session_id(client_session_id)?;
         let mut registry = self
             .registry
@@ -216,10 +220,38 @@ impl SessionHost {
             .clients
             .entry(client_session_id.to_owned())
             .or_insert_with(|| Arc::new(AtomicU64::new(0)))
-            .store(now_millis(), Ordering::Release);
+            .store(now, Ordering::Release);
+        for session in registry.sessions.values() {
+            session.cancel_uncommitted_cleanup_for_client(client_session_id)?;
+        }
         drop(registry);
         self.notify_revision();
         Ok(())
+    }
+
+    /// Keep every managed session represented by the WebUI's global event
+    /// stream leased while at least one WebSocket client remains attached.
+    pub(crate) fn touch_web_clients(&self) -> Result<usize> {
+        self.touch_web_clients_at(now_millis())
+    }
+
+    fn touch_web_clients_at(&self, now: u64) -> Result<usize> {
+        let registry = self
+            .registry
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
+        let refreshed = registry.clients.len();
+        for lease in registry.clients.values() {
+            lease.store(now, Ordering::Release);
+        }
+        for session in registry.sessions.values() {
+            session.cancel_uncommitted_orphan_cleanup()?;
+        }
+        drop(registry);
+        if refreshed > 0 {
+            self.notify_revision();
+        }
+        Ok(refreshed)
     }
 
     pub(crate) fn create(
@@ -576,7 +608,7 @@ impl SessionHost {
 
     pub(crate) fn reap_orphans(&self) -> Result<CloseGroupResult> {
         let now = now_millis();
-        let sessions = {
+        let candidates = {
             let registry = self
                 .registry
                 .lock()
@@ -589,8 +621,27 @@ impl SessionHost {
             }
             sessions
         };
+
+        let mut sessions = Vec::new();
+        for (handle, session) in candidates {
+            let committed = {
+                let registry = self
+                    .registry
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
+                let still_registered = registry
+                    .sessions
+                    .get(&handle)
+                    .is_some_and(|current| Arc::ptr_eq(current, &session));
+                still_registered && session.commit_orphan_cleanup(now_millis())?
+            };
+            if committed {
+                sessions.push((handle, session));
+            }
+        }
         if !sessions.is_empty() {
-            // Surface ClientLeaseState::Closing as soon as cleanup is claimed.
+            // Surface ClientLeaseState::Closing only after the final lease and
+            // phase recheck commits cleanup.
             self.notify_revision();
         }
         self.close_sessions(sessions)
@@ -611,7 +662,7 @@ impl SessionHost {
                     registry.remove_session(&handle, &session);
                 }
                 Err(error) => {
-                    session.cleanup_claimed.store(false, Ordering::Release);
+                    session.reset_orphan_cleanup();
                     failures.push(format!("{handle}: {error:#}"));
                 }
             }
@@ -711,6 +762,7 @@ struct Session {
     shutdown: AtomicBool,
     terminating: AtomicBool,
     cleanup_claimed: AtomicBool,
+    cleanup_committed: AtomicBool,
 }
 
 struct SessionInner {
@@ -912,6 +964,7 @@ impl Session {
             shutdown: AtomicBool::new(false),
             terminating: AtomicBool::new(false),
             cleanup_claimed: AtomicBool::new(false),
+            cleanup_committed: AtomicBool::new(false),
         });
 
         spawn_reader(Arc::clone(&session), reader);
@@ -945,7 +998,9 @@ impl Session {
     }
 
     fn claim_orphan_cleanup(&self, now: u64) -> Result<bool> {
-        if self.cleanup_claimed.load(Ordering::Acquire) {
+        if self.cleanup_claimed.load(Ordering::Acquire)
+            || self.cleanup_committed.load(Ordering::Acquire)
+        {
             return Ok(false);
         }
         let inner = self
@@ -955,11 +1010,68 @@ impl Session {
         if !inner.orphan_cleanup_due(now) {
             return Ok(false);
         }
-        drop(inner);
+        // Claim while the session lock is still held. Input and phase changes
+        // take the same lock, so an idle session cannot become Running between
+        // the eligibility check and the claim.
         Ok(self
             .cleanup_claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok())
+    }
+
+    /// Recheck the lease and phase immediately before cleanup becomes
+    /// irreversible. The caller holds the host registry lock, serializing this
+    /// commit with every Codex/WebUI lease refresh.
+    fn commit_orphan_cleanup(&self, now: u64) -> Result<bool> {
+        if !self.cleanup_claimed.load(Ordering::Acquire)
+            || self.cleanup_committed.load(Ordering::Acquire)
+        {
+            return Ok(false);
+        }
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        if !self.cleanup_claimed.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        if !inner.orphan_cleanup_due(now) {
+            self.cleanup_claimed.store(false, Ordering::Release);
+            return Ok(false);
+        }
+        Ok(self
+            .cleanup_committed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok())
+    }
+
+    fn cancel_uncommitted_cleanup_for_client(&self, client_session_id: &str) -> Result<bool> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        if inner.client_session_id.as_deref() != Some(client_session_id) {
+            return Ok(false);
+        }
+        Ok(self.cancel_uncommitted_cleanup_locked())
+    }
+
+    fn cancel_uncommitted_orphan_cleanup(&self) -> Result<bool> {
+        let _inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        Ok(self.cancel_uncommitted_cleanup_locked())
+    }
+
+    fn cancel_uncommitted_cleanup_locked(&self) -> bool {
+        !self.cleanup_committed.load(Ordering::Acquire)
+            && self.cleanup_claimed.swap(false, Ordering::AcqRel)
+    }
+
+    fn reset_orphan_cleanup(&self) {
+        self.cleanup_committed.store(false, Ordering::Release);
+        self.cleanup_claimed.store(false, Ordering::Release);
     }
 
     fn apply_hook_event(&self, event: HookEvent) -> Result<()> {
@@ -1129,6 +1241,11 @@ impl Session {
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        if self.cleanup_claimed.load(Ordering::Acquire)
+            || self.cleanup_committed.load(Ordering::Acquire)
+        {
+            bail!("session cleanup has started");
+        }
         if inner.process_done || phase_is_terminal(inner.phase) || inner.error.is_some() {
             bail!("session is not writable");
         }
@@ -1169,6 +1286,11 @@ impl Session {
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        if self.cleanup_claimed.load(Ordering::Acquire)
+            || self.cleanup_committed.load(Ordering::Acquire)
+        {
+            bail!("session cleanup has started");
+        }
         if inner.process_done || phase_is_terminal(inner.phase) || inner.error.is_some() {
             bail!("session is not resizable");
         }
@@ -1469,6 +1591,14 @@ impl SessionInner {
             owner: self.owner.clone(),
             client_session_id: self.client_session_id.clone(),
             client_state,
+            client_lease_ms: self
+                .client_lease
+                .as_ref()
+                .map(|_| self.orphan_policy.lease_ms),
+            orphan_grace_ms: self
+                .client_lease
+                .as_ref()
+                .map(|_| self.orphan_policy.grace_ms),
             client_last_seen_at_ms,
             orphaned_at_ms,
             auto_close_at_ms,
@@ -2324,6 +2454,7 @@ mod tests {
             shutdown: AtomicBool::new(false),
             terminating: AtomicBool::new(false),
             cleanup_claimed: AtomicBool::new(false),
+            cleanup_committed: AtomicBool::new(false),
         }
     }
 
@@ -2542,6 +2673,103 @@ mod tests {
             assert_eq!(running.3, None);
             assert!(!inner.orphan_cleanup_due(10_000));
         }
+    }
+
+    #[test]
+    fn web_keepalive_refreshes_leases_and_cancels_pending_cleanup() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Idle);
+        let session = host.get("gbt-test").unwrap();
+        let lease = Arc::new(AtomicU64::new(1_000));
+        {
+            let mut inner = session.inner.lock().unwrap();
+            inner.client_session_id = Some("codex-web".to_owned());
+            inner.client_lease = Some(Arc::clone(&lease));
+            inner.orphan_policy = OrphanPolicy {
+                lease_ms: 100,
+                grace_ms: 200,
+            };
+            inner.phase_changed_at_ms = 900;
+        }
+        host.registry
+            .lock()
+            .unwrap()
+            .clients
+            .insert("codex-web".to_owned(), Arc::clone(&lease));
+
+        assert!(session.claim_orphan_cleanup(1_300).unwrap());
+        assert!(session.cleanup_claimed.load(Ordering::Acquire));
+        let before = host.revision();
+        assert_eq!(host.touch_web_clients_at(1_350).unwrap(), 1);
+        assert_eq!(lease.load(Ordering::Acquire), 1_350);
+        assert!(!session.cleanup_claimed.load(Ordering::Acquire));
+        assert!(!session.cleanup_committed.load(Ordering::Acquire));
+        assert_ne!(host.revision(), before);
+        assert_eq!(
+            session
+                .inner
+                .lock()
+                .unwrap()
+                .client_lifecycle(1_400, false)
+                .0,
+            ClientLeaseState::Connected
+        );
+    }
+
+    #[test]
+    fn final_orphan_commit_rechecks_lease_and_blocks_late_input() {
+        let session = test_session(SessionPhase::Idle);
+        let lease = Arc::new(AtomicU64::new(1_000));
+        {
+            let mut inner = session.inner.lock().unwrap();
+            inner.client_session_id = Some("codex-race".to_owned());
+            inner.client_lease = Some(Arc::clone(&lease));
+            inner.orphan_policy = OrphanPolicy {
+                lease_ms: 100,
+                grace_ms: 200,
+            };
+            inner.phase_changed_at_ms = 900;
+        }
+
+        assert!(session.claim_orphan_cleanup(1_300).unwrap());
+        lease.store(1_300, Ordering::Release);
+        assert!(!session.commit_orphan_cleanup(1_300).unwrap());
+        assert!(!session.cleanup_claimed.load(Ordering::Acquire));
+
+        assert!(session.claim_orphan_cleanup(1_600).unwrap());
+        assert!(session.commit_orphan_cleanup(1_600).unwrap());
+        let error = session.write_raw(b"new task\r".to_vec()).unwrap_err();
+        assert!(format!("{error:#}").contains("session cleanup has started"));
+    }
+
+    #[test]
+    fn client_heartbeat_cancels_claim_before_input_is_accepted() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Idle);
+        let session = host.get("gbt-test").unwrap();
+        let lease = Arc::new(AtomicU64::new(1_000));
+        let (writer_tx, writer_rx) = sync_channel(1);
+        *session.writer_tx.lock().unwrap() = Some(writer_tx);
+        {
+            let mut inner = session.inner.lock().unwrap();
+            inner.client_session_id = Some("codex-resume".to_owned());
+            inner.client_lease = Some(Arc::clone(&lease));
+            inner.orphan_policy = OrphanPolicy {
+                lease_ms: 100,
+                grace_ms: 200,
+            };
+            inner.phase_changed_at_ms = 900;
+        }
+        host.registry
+            .lock()
+            .unwrap()
+            .clients
+            .insert("codex-resume".to_owned(), lease);
+
+        assert!(session.claim_orphan_cleanup(1_300).unwrap());
+        host.touch_client_at("codex-resume", 1_300).unwrap();
+        assert!(!session.cleanup_claimed.load(Ordering::Acquire));
+        session.write_raw(b"resume\r".to_vec()).unwrap();
+        assert_eq!(writer_rx.recv().unwrap(), b"resume\r");
+        assert_eq!(session.state().unwrap().phase, SessionPhase::Running);
     }
 
     #[test]
@@ -3145,6 +3373,11 @@ mod tests {
         // Connected while now < 1100; at 1100 state is already Orphaned (idle).
         // Never call next_lifecycle_deadline_ms while holding inner (non-reentrant Mutex).
         let session = host.get("gbt-test").unwrap();
+
+        let connected_state = session.inner.lock().unwrap().to_state(1_050, false);
+        assert_eq!(connected_state.client_lease_ms, Some(100));
+        assert_eq!(connected_state.orphan_grace_ms, Some(200));
+        assert_eq!(connected_state.client_state, ClientLeaseState::Connected);
 
         assert_eq!(
             session

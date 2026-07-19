@@ -1,4 +1,5 @@
 import { Component } from "react";
+import { createTranslator, resolveLocale } from "../i18n/index.js";
 import { secondaryButton } from "../utils/ui.js";
 
 export class AppErrorBoundary extends Component {
@@ -14,16 +15,17 @@ export class AppErrorBoundary extends Component {
 
   render() {
     if (this.state.error) {
+      const t = createTranslator(resolveLocale());
       return (
         <div
           className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-4 py-16 text-center"
           role="alert"
         >
           <p className="text-xs font-bold tracking-[0.16em] text-[var(--accent)]">
-            GROK BRIDGE
+            {t("error.brand")}
           </p>
           <h1 className="mt-2 text-lg font-bold text-[var(--strong)]">
-            页面渲染异常
+            {t("error.renderTitle")}
           </h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
             {String(this.state.error?.message || this.state.error)}
@@ -36,7 +38,7 @@ export class AppErrorBoundary extends Component {
               window.location.reload();
             }}
           >
-            重新加载
+            {t("error.reload")}
           </button>
         </div>
       );

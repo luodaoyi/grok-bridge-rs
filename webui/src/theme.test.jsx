@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeSwitcher } from "./App.jsx";
+import { I18nProvider } from "./i18n/index.js";
 import { applyTheme, resolveTheme, THEME_KEY } from "./theme.js";
 
 function mediaQuery(matches = false) {
@@ -45,7 +46,13 @@ describe("theme", () => {
   });
 
   it("persists manual choice and follows system changes in auto mode", async () => {
-    await act(async () => root.render(<ThemeSwitcher />));
+    await act(async () =>
+      root.render(
+        <I18nProvider initialLocale="zh-CN">
+          <ThemeSwitcher />
+        </I18nProvider>,
+      ),
+    );
     const dark = [...container.querySelectorAll("button")].find((button) =>
       button.textContent.includes("深色"),
     );

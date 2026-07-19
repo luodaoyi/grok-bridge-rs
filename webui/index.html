@@ -1,21 +1,100 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="auto" data-resolved-theme="dark">
+<html lang="en" data-theme="auto" data-resolved-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="Grok Bridge 本机会话控制台：Codex 监督者与 Grok 子代理状态管理"
+      content="Grok Bridge local session console: Codex supervisors and Grok subagent management"
     />
-    <title>Grok Bridge 会话管理</title>
+    <title>Grok Bridge Sessions</title>
     <script>
       (() => {
-        const key = "grok-bridge-theme";
+        const themeKey = "grok-bridge-theme";
+        const localeKey = "grok-bridge-locale";
+        const supported = [
+          "zh-CN",
+          "zh-TW",
+          "en",
+          "fr",
+          "de",
+          "ru",
+          "ja",
+          "ko",
+        ];
+        const titles = {
+          "zh-CN": "Grok Bridge 会话管理",
+          "zh-TW": "Grok Bridge 工作階段管理",
+          en: "Grok Bridge Sessions",
+          fr: "Sessions Grok Bridge",
+          de: "Grok Bridge Sitzungen",
+          ru: "Сессии Grok Bridge",
+          ja: "Grok Bridge セッション",
+          ko: "Grok Bridge 세션",
+        };
+        const descriptions = {
+          "zh-CN":
+            "Grok Bridge 本机会话控制台：Codex 监督者与 Grok 子代理状态管理",
+          "zh-TW":
+            "Grok Bridge 本機工作階段主控台：Codex 監督者與 Grok 子代理狀態管理",
+          en: "Grok Bridge local session console: Codex supervisors and Grok subagent management",
+          fr: "Console locale Grok Bridge : superviseurs Codex et gestion des sous-agents Grok",
+          de: "Grok Bridge lokale Sitzungskonsole: Codex-Supervisoren und Grok-Subagenten-Verwaltung",
+          ru: "Локальная консоль сессий Grok Bridge: супервизоры Codex и управление субагентами Grok",
+          ja: "Grok Bridge ローカルセッションコンソール：Codex スーパーバイザーと Grok サブエージェント管理",
+          ko: "Grok Bridge 로컬 세션 콘솔: Codex 슈퍼바이저 및 Grok 서브에이전트 관리",
+        };
+
+        function normalizeLocale(tag) {
+          if (!tag) return null;
+          const lower = String(tag).toLowerCase().replace(/_/g, "-");
+          for (const locale of supported) {
+            if (lower === locale.toLowerCase()) return locale;
+          }
+          const parts = lower.split("-").filter(Boolean);
+          if (!parts.length) return null;
+          const lang = parts[0];
+          if (lang === "zh") {
+            if (
+              parts.includes("hant") ||
+              parts.includes("tw") ||
+              parts.includes("hk") ||
+              parts.includes("mo")
+            ) {
+              return "zh-TW";
+            }
+            return "zh-CN";
+          }
+          const primary = {
+            en: "en",
+            fr: "fr",
+            de: "de",
+            ru: "ru",
+            ja: "ja",
+            ko: "ko",
+          };
+          return primary[lang] || null;
+        }
+
+        function detectLocale() {
+          const list =
+            navigator.languages && navigator.languages.length
+              ? navigator.languages
+              : navigator.language
+                ? [navigator.language]
+                : [];
+          for (const tag of list) {
+            const normalized = normalizeLocale(tag);
+            if (normalized) return normalized;
+          }
+          return "en";
+        }
+
         const root = document.documentElement;
         let preference = "auto";
         try {
-          const stored = localStorage.getItem(key);
+          const stored = localStorage.getItem(themeKey);
           if (["auto", "light", "dark"].includes(stored)) preference = stored;
         } catch {}
         const resolved =
@@ -28,6 +107,21 @@
         root.dataset.resolvedTheme = resolved;
         root.style.colorScheme = resolved;
         document.querySelector('meta[name="color-scheme"]').content = resolved;
+
+        let locale = "en";
+        try {
+          const storedLocale = localStorage.getItem(localeKey);
+          if (supported.includes(storedLocale)) locale = storedLocale;
+          else locale = detectLocale();
+        } catch {
+          locale = detectLocale();
+        }
+        root.lang = locale;
+        document.title = titles[locale] || titles.en;
+        const meta = document.querySelector('meta[name="description"]');
+        if (meta) {
+          meta.content = descriptions[locale] || descriptions.en;
+        }
       })();
     </script>
   </head>

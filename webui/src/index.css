@@ -98,6 +98,15 @@
   --theme-control-bg: #111412;
   --theme-active-bg: #d1fae5;
   --theme-active-text: #0b0d0c;
+  /* Language menu: explicit dark-theme readable surfaces (not native <select>). */
+  --lang-menu-bg: #141917;
+  --lang-menu-text: #edf3f0;
+  --lang-menu-border: #3f4a45;
+  --lang-menu-selected-bg: #1d3a33;
+  --lang-menu-selected-text: #a7f3d0;
+  --lang-menu-active-bg: #2a4039;
+  --lang-menu-active-text: #f0fdf9;
+  --lang-menu-check: #5eead4;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28);
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.35);
@@ -196,11 +205,57 @@
   --theme-control-bg: #edf2f0;
   --theme-active-bg: #17201d;
   --theme-active-text: #ffffff;
+  /* Language menu: explicit light-theme readable surfaces. */
+  --lang-menu-bg: #ffffff;
+  --lang-menu-text: #17201d;
+  --lang-menu-border: #b8c3bf;
+  --lang-menu-selected-bg: #dcfce7;
+  --lang-menu-selected-text: #065f46;
+  --lang-menu-active-bg: #ccfbf1;
+  --lang-menu-active-text: #0f3d38;
+  --lang-menu-check: #0f766e;
   --shadow-sm: 0 1px 2px rgba(15, 23, 20, 0.06);
   --shadow-md: 0 8px 24px rgba(15, 23, 20, 0.08);
   --shadow-lg: 0 16px 40px rgba(15, 23, 20, 0.1);
   --skip-bg: #0f766e;
   --skip-text: #ecfdf5;
+}
+
+/* Custom language picker menu (replaces native <select> options). */
+.lang-menu {
+  background: var(--lang-menu-bg);
+  color: var(--lang-menu-text);
+  border-color: var(--lang-menu-border);
+  /* Anchor to the inline-end edge so LTR (right) and RTL (left) both work. */
+  inset-inline-end: 0;
+  text-align: start;
+}
+
+.lang-menu-option {
+  color: var(--lang-menu-text);
+  background: transparent;
+  text-align: start;
+}
+
+.lang-menu-option:hover,
+.lang-menu-option-active {
+  background: var(--lang-menu-active-bg);
+  color: var(--lang-menu-active-text);
+}
+
+.lang-menu-option-selected {
+  background: var(--lang-menu-selected-bg);
+  color: var(--lang-menu-selected-text);
+}
+
+.lang-menu-option-selected.lang-menu-option-active,
+.lang-menu-option-selected:hover {
+  background: var(--lang-menu-active-bg);
+  color: var(--lang-menu-active-text);
+}
+
+.lang-menu-check {
+  color: var(--lang-menu-check);
 }
 
 * {
@@ -311,11 +366,25 @@ summary::-webkit-details-marker {
 .terminal-shell {
   font-variant-ligatures: none;
   font-feature-settings: "tnum" 1;
+  /* Host height owns the hard max; shell must not cap at the same value or
+     header + host + resize handle get overflow-clipped. */
+  /* Terminal grid stays LTR even when the document is Arabic RTL. */
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.terminal-xterm {
+  box-sizing: border-box;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .terminal-xterm .xterm {
   height: 100%;
+  width: 100%;
   padding: 0;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .terminal-xterm .xterm-viewport {
@@ -328,6 +397,15 @@ summary::-webkit-details-marker {
 
 .terminal-xterm:focus-visible {
   outline: none;
+}
+
+.terminal-resize-handle {
+  min-height: 0.75rem;
+}
+
+.terminal-resize-handle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -4,6 +4,7 @@ import {
   closeOwnerRequest,
   closeSessionRequest,
 } from "../api.js";
+import { useI18n } from "../i18n/index.js";
 import { errorMessage } from "../utils/errors.js";
 
 /**
@@ -11,29 +12,33 @@ import { errorMessage } from "../utils/errors.js";
  * They intentionally do not force a GET /api/sessions refresh.
  */
 export function useSessionActions({ loadingRef, setLoading, setNotice }) {
+  const { t, formatNumber } = useI18n();
+
   const closeSession = useCallback(
     async (id) => {
       if (loadingRef.current) return;
-      if (!window.confirm(`确认关闭 ${id} 及其 Grok 进程？`)) return;
+      if (!window.confirm(t("action.confirmCloseSession", { id }))) return;
       loadingRef.current = true;
       setLoading(true);
       try {
         await closeSessionRequest(id);
         setNotice({
           tone: "info",
-          text: `已关闭 Grok 会话 ${id}。实时通道将推送更新。`,
+          text: t("action.closedSession", { id }),
         });
       } catch (error) {
         setNotice({
           tone: "error",
-          text: `关闭失败：${errorMessage(error)}`,
+          text: t("action.closeFailed", {
+            detail: errorMessage(error, t),
+          }),
         });
       } finally {
         loadingRef.current = false;
         setLoading(false);
       }
     },
-    [loadingRef, setLoading, setNotice],
+    [loadingRef, setLoading, setNotice, t],
   );
 
   const closeGroup = useCallback(
@@ -42,7 +47,10 @@ export function useSessionActions({ loadingRef, setLoading, setNotice }) {
       const displayOwner = owner ?? clientSessionId;
       if (
         !window.confirm(
-          `确认关闭 Codex“${displayOwner}”下的全部 ${count} 个 Grok 会话？`,
+          t("action.confirmCloseGroup", {
+            owner: displayOwner,
+            count: formatNumber(count),
+          }),
         )
       ) {
         return;
@@ -56,7 +64,7 @@ export function useSessionActions({ loadingRef, setLoading, setNotice }) {
         if (result.matched === 0) {
           setNotice({
             tone: "info",
-            text: "该 Codex 分组已没有活跃 Grok 会话。",
+            text: t("action.groupEmpty"),
           });
         } else if (
           result.failures?.length ||
@@ -64,25 +72,34 @@ export function useSessionActions({ loadingRef, setLoading, setNotice }) {
         ) {
           setNotice({
             tone: "error",
-            text: `已关闭 ${result.closed}/${result.matched} 个会话；失败：${(result.failures || []).join("、")}`,
+            text: t("action.groupPartial", {
+              closed: formatNumber(result.closed),
+              matched: formatNumber(result.matched),
+              failures: (result.failures || []).join(t("action.failureJoin")),
+            }),
           });
         } else {
           setNotice({
             tone: "info",
-            text: `已关闭 Codex“${displayOwner}”下的全部 ${result.closed} 个 Grok 会话。实时通道将推送更新。`,
+            text: t("action.groupClosed", {
+              owner: displayOwner,
+              count: formatNumber(result.closed),
+            }),
           });
         }
       } catch (error) {
         setNotice({
           tone: "error",
-          text: `关闭失败：${errorMessage(error)}`,
+          text: t("action.closeFailed", {
+            detail: errorMessage(error, t),
+          }),
         });
       } finally {
         loadingRef.current = false;
         setLoading(false);
       }
     },
-    [loadingRef, setLoading, setNotice],
+    [formatNumber, loadingRef, setLoading, setNotice, t],
   );
 
   return { closeSession, closeGroup };

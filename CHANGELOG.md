@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 - 2026-07-19
+
+- Localized the WebUI into 13 languages with persisted browser detection, an accessible themed language picker, locale-aware formatting, and right-to-left Arabic layout.
+- Replaced vertically stacked Grok cards with per-supervisor session tabs and condensed fixed lease guidance so large Codex groups remain quick to navigate.
+- Added adjustable xterm.js terminal height with viewport fitting, plus a global keyboard-input switch that remains read-only by default and sends raw input and resize commands over the existing WebSocket only when enabled.
+- Kept managed Codex leases alive while a WebUI event socket is attached, exposed lease and orphan-grace timing in session state, and added live cleanup deadlines and countdowns to the UI.
+- Eliminated the orphan-cleanup deadline race by atomically rechecking the lease and safe phase before shutdown becomes irreversible, while allowing timely heartbeats to cancel uncommitted cleanup.
+
 ## 0.7.0 - 2026-07-19
 
 - Replaced the WebUI's two-second session polling with a same-origin, read-only WebSocket event stream that pushes lifecycle changes and bounded terminal deltas as they happen.

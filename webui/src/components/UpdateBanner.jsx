@@ -1,7 +1,9 @@
 import { ExternalLink } from "lucide-react";
+import { useI18n } from "../i18n/index.js";
 import { secondaryButton } from "../utils/ui.js";
 
 export function UpdateBanner({ version, onDismiss }) {
+  const { t } = useI18n();
   if (!version?.update_available || !version.latest) return null;
   return (
     <div
@@ -12,11 +14,10 @@ export function UpdateBanner({ version, onDismiss }) {
     >
       <div className="min-w-0">
         <strong className="block text-sm text-[var(--strong)]">
-          发现新版本 v{version.latest}
+          {t("update.title", { version: version.latest })}
         </strong>
-        <p className="mt-0.5 text-[var(--muted)]">
-          当前 Runtime 为 v{version.current}
-          。请手动下载并替换本地二进制，重启后生效。
+        <p className="mt-0.5 break-words text-[var(--muted)]">
+          {t("update.body", { current: version.current })}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -27,10 +28,10 @@ export function UpdateBanner({ version, onDismiss }) {
           rel="noreferrer"
         >
           <ExternalLink aria-hidden="true" size={14} />
-          打开最新 Release
+          {t("update.openRelease")}
         </a>
         <button className={secondaryButton} type="button" onClick={onDismiss}>
-          稍后提醒
+          {t("update.dismiss")}
         </button>
       </div>
     </div>

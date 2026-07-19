@@ -9,7 +9,27 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: MockXTerm,
 }));
 
+vi.mock("@xterm/addon-fit", () => {
+  class MockFitAddon {
+    static instances = [];
+    constructor() {
+      this.fitCount = 0;
+      this.disposed = false;
+      MockFitAddon.instances.push(this);
+    }
+    activate() {}
+    fit() {
+      this.fitCount += 1;
+    }
+    dispose() {
+      this.disposed = true;
+    }
+  }
+  return { FitAddon: MockFitAddon };
+});
+
 import App from "./App.jsx";
+import { SUPPORTED_LOCALES } from "./i18n/index.js";
 
 const sessions = [
   {
@@ -128,7 +148,25 @@ describe("App", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      (cb) => {
+        cb(0);
+        return 1;
+      },
+    );
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     window.localStorage.clear();
+    // Keep existing Chinese UI assertions stable regardless of host language.
+    window.localStorage.setItem("grok-bridge-locale", "zh-CN");
     vi.stubGlobal("fetch", mockFetch());
     container = document.createElement("div");
     document.body.append(container);
@@ -410,10 +448,33 @@ describe("App", () => {
         ...sessions[0],
         client_state: "orphaned",
         auto_close_at_ms: Date.now() + 60_000,
+        client_lease_ms: 120_000,
+        orphan_grace_ms: 600_000,
       },
     ]);
     expect(container.textContent).toContain("清理倒计时");
-    expect(container.textContent).toContain("自动清理倒计时");
+    expect(container.textContent).toContain("自动关闭倒计时");
+    expect(container.querySelector('[data-lifecycle-hint="orphaned"]')).not.toBeNull();
+  });
+
+  it("shows keep-alive lifecycle for connected managed sessions", async () => {
+    await renderAppAndConnect([
+      {
+        ...sessions[0],
+        client_state: "connected",
+        client_lease_ms: 120_000,
+        orphan_grace_ms: 600_000,
+      },
+    ]);
+    const hint = container.querySelector('[data-lifecycle-hint="connected"]');
+    expect(hint).not.toBeNull();
+    expect(hint.textContent).toMatch(/正在保活|不会自动关闭/);
+  });
+
+  it("does not invent timeout messaging for unmanaged sessions", async () => {
+    await renderAppAndConnect([sessions[1]]);
+    expect(container.querySelector("[data-lifecycle-hint]")).toBeNull();
+    expect(container.textContent).not.toMatch(/自动关闭|正在保活|宽限/);
   });
 
   it("applies ordered terminal appends after the initial snapshot", async () => {
@@ -449,5 +510,150 @@ describe("App", () => {
     );
     expect(decoded.join("")).toContain("1");
     expect(decoded.join("")).toContain("2");
+  });
+
+  it("defaults interactive mode off and does not persist the switch", async () => {
+    await renderAppAndConnect();
+    const toggle = container.querySelector("[data-interactive-toggle]");
+    expect(toggle).not.toBeNull();
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.dataset.interactive).toBe("off");
+    expect(
+      [...container.querySelectorAll("[data-readonly]")].every(
+        (node) => node.dataset.readonly === "true",
+      ),
+    ).toBe(true);
+    expect(MockXTerm.instances.every((term) => term.options.disableStdin)).toBe(
+      true,
+    );
+    expect(window.localStorage.getItem("grok-bridge-interactive")).toBeNull();
+
+    await act(async () => toggle.click());
+    await settle();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(container.querySelector("[data-interactive-warning]")).not.toBeNull();
+    expect(MockXTerm.instances.every((term) => !term.options.disableStdin)).toBe(
+      true,
+    );
+    expect(window.localStorage.getItem("grok-bridge-interactive")).toBeNull();
+  });
+
+  it("sends terminal_input over the events WebSocket only while interactive", async () => {
+    const ws = await renderAppAndConnect([sessions[0]]);
+    const toggle = container.querySelector("[data-interactive-toggle]");
+    await act(async () => toggle.click());
+    await settle();
+    const term = MockXTerm.instances[0];
+    await act(async () => term.emitData("hello"));
+    await settle();
+    const sent = ws.sent.map((item) => JSON.parse(String(item)));
+    expect(sent.some((msg) => msg.type === "terminal_input")).toBe(true);
+    const input = sent.find((msg) => msg.type === "terminal_input");
+    expect(input.session).toBe("gbt-a");
+    expect(input.data_base64).toBe(btoa("hello"));
+    expect(input.id).toBeTruthy();
+
+    await act(async () => toggle.click());
+    await settle();
+    const before = ws.sent.length;
+    await act(async () => term.emitData("nope"));
+    await settle();
+    const after = ws.sent.map((item) => JSON.parse(String(item)));
+    expect(after.filter((msg) => msg.type === "terminal_input").length).toBe(
+      sent.filter((msg) => msg.type === "terminal_input").length,
+    );
+    expect(ws.sent.length).toBeGreaterThanOrEqual(before);
+  });
+
+  it("does not buffer keystrokes across disconnect", async () => {
+    const ws = await renderAppAndConnect([sessions[0]]);
+    const toggle = container.querySelector("[data-interactive-toggle]");
+    await act(async () => toggle.click());
+    await settle();
+    await act(async () => ws.close());
+    await settle();
+    const term = MockXTerm.instances[0];
+    const before = ws.sent.length;
+    await act(async () => term.emitData("buffered?"));
+    await settle();
+    expect(ws.sent.length).toBe(before);
+    expect(container.textContent).toMatch(/断开|断|disconnect|离线|offline|不可|fail|失败/i);
+  });
+
+  it("exposes a language switcher that localizes chrome without touching terminal bytes", async () => {
+    const waitingSession = {
+      ...sessions[0],
+      session: "gbt-wait",
+      activity: "waiting",
+      waiting_reason: "ask_user:confirm_path",
+      title: "WAIT_TITLE_RAW",
+      hook_event: "pre_tool_use",
+      tool_name: "shell_exec",
+      screen: "RAW_TERMINAL_BYTES_αβ",
+    };
+    await renderAppAndConnect([waitingSession]);
+    expect(document.documentElement.lang).toBe("zh-CN");
+    expect(document.title).toContain("Grok Bridge");
+    const switcher = container.querySelector("[data-language-switcher]");
+    expect(switcher).not.toBeNull();
+    expect(switcher.querySelector("select")).toBeNull();
+
+    const terminalTextBefore = MockXTerm.instances[0].written.slice();
+    const trigger = switcher.querySelector("[data-language-trigger]");
+    expect(trigger).not.toBeNull();
+
+    await act(async () => trigger.click());
+    await settle();
+    expect(switcher.querySelectorAll('[role="option"]')).toHaveLength(
+      SUPPORTED_LOCALES.length,
+    );
+    await act(async () => {
+      switcher
+        .querySelector("[data-language-menu]")
+        ?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+    });
+    await settle();
+
+    async function pickLocale(code) {
+      if (!switcher.querySelector("[data-language-menu]")) {
+        await act(async () => trigger.click());
+        await settle();
+      }
+      const option = switcher.querySelector(`[data-language-option="${code}"]`);
+      expect(option).not.toBeNull();
+      await act(async () => option.click());
+      await settle();
+    }
+
+    await pickLocale("en");
+    expect(document.documentElement.lang).toBe("en");
+    expect(window.localStorage.getItem("grok-bridge-locale")).toBe("en");
+    expect(container.textContent).toContain("Supervisor");
+    expect(container.textContent).toContain("Live channel connected");
+    expect(container.textContent).toContain("Close Grok");
+    // Raw session fields stay as provided by the Runtime.
+    expect(container.textContent).toContain("Codex A/中文");
+    expect(container.textContent).toContain("WAIT_TITLE_RAW");
+    expect(container.textContent).toContain("pre_tool_use");
+    expect(container.textContent).toContain("shell_exec");
+    expect(container.textContent).toContain("ask_user:confirm_path");
+    expect(container.textContent).toContain("C:\\work\\todo-a");
+    expect(MockXTerm.instances[0].written).toEqual(terminalTextBefore);
+
+    await pickLocale("fr");
+    expect(document.documentElement.lang).toBe("fr");
+    expect(window.localStorage.getItem("grok-bridge-locale")).toBe("fr");
+    expect(container.textContent).toMatch(/Canal en direct connecté|sous-agent|Fermer Grok/i);
+    expect(container.textContent).toContain("ask_user:confirm_path");
+    expect(container.textContent).toContain("WAIT_TITLE_RAW");
+    expect(MockXTerm.instances[0].written).toEqual(terminalTextBefore);
+
+    await pickLocale("de");
+    expect(document.documentElement.lang).toBe("de");
+    expect(container.textContent).toMatch(/Live-Kanal verbunden|Grok schließen/i);
+    expect(container.textContent).toContain("ask_user:confirm_path");
+    expect(MockXTerm.instances[0].written).toEqual(terminalTextBefore);
   });
 });

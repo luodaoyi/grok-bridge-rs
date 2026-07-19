@@ -247,6 +247,10 @@ pub(crate) struct SessionState {
     #[serde(default)]
     pub(crate) client_state: ClientLeaseState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) client_lease_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) orphan_grace_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) client_last_seen_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) orphaned_at_ms: Option<u64>,
@@ -679,6 +683,11 @@ fn validate_identifier(value: &str, field: impl Display) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// WebUI/WebSocket session handles reuse the same identifier rules as CLI frames.
+pub(crate) fn validate_session_handle(session: &str) -> Result<()> {
+    validate_identifier(session, "session handle")
 }
 
 #[cfg(test)]
@@ -1127,6 +1136,8 @@ mod tests {
                 owner: Some("codex-thread-42".to_owned()),
                 client_session_id: Some("codex-client-42".to_owned()),
                 client_state: ClientLeaseState::Connected,
+                client_lease_ms: Some(120_000),
+                orphan_grace_ms: Some(600_000),
                 client_last_seen_at_ms: Some(20),
                 orphaned_at_ms: None,
                 auto_close_at_ms: None,
@@ -1175,9 +1186,11 @@ mod tests {
         let session = SessionState {
             session: "gbt-1".to_owned(),
             owner: None,
-            client_session_id: None,
-            client_state: ClientLeaseState::Unmanaged,
-            client_last_seen_at_ms: None,
+            client_session_id: Some("codex-1".to_owned()),
+            client_state: ClientLeaseState::Connected,
+            client_lease_ms: Some(120_000),
+            orphan_grace_ms: Some(600_000),
+            client_last_seen_at_ms: Some(1),
             orphaned_at_ms: None,
             auto_close_at_ms: None,
             phase: SessionPhase::Idle,
@@ -1226,6 +1239,8 @@ mod tests {
         let value = serde_json::to_value(&message).unwrap();
         assert_eq!(value["type"], "sessions");
         assert!(value["sessions"].is_array());
+        assert_eq!(value["sessions"][0]["client_lease_ms"], 120_000);
+        assert_eq!(value["sessions"][0]["orphan_grace_ms"], 600_000);
         assert_eq!(value["terminals"][0]["reset"], true);
         assert_eq!(value["terminals"][0]["next_cursor"], 7);
         assert_eq!(value["terminals"][1]["reset"], false);
