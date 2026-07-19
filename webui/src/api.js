@@ -54,6 +54,54 @@ export async function getSessions({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   }
 }
 
+/** Same-origin WebSocket URL for the fixed /api/events stream. */
+export function eventsWebSocketUrl(location = window.location) {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/api/events`;
+}
+
+export function normalizeTerminalEntries(data) {
+  if (data == null) return [];
+  if (!Array.isArray(data)) {
+    throw new Error("terminals payload is not an array");
+  }
+  return data
+    .filter(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof item.session === "string" &&
+        item.session.length > 0 &&
+        typeof item.data_base64 === "string",
+    )
+    .map((item) => ({
+      session: item.session,
+      reset: Boolean(item.reset),
+      cursor: typeof item.cursor === "number" ? item.cursor : 0,
+      next_cursor:
+        typeof item.next_cursor === "number" ? item.next_cursor : 0,
+      data_base64: item.data_base64,
+    }));
+}
+
+/**
+ * Normalize a pushed WebSocket JSON message.
+ * Contract: { type: 'sessions', sessions: SessionState[], terminals: [...] }
+ */
+export function normalizeEventsMessage(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("events payload is not an object");
+  }
+  if (data.type !== "sessions") {
+    throw new Error(`unsupported events type: ${String(data.type)}`);
+  }
+  return {
+    type: "sessions",
+    sessions: normalizeSessions(data.sessions),
+    terminals: normalizeTerminalEntries(data.terminals),
+  };
+}
+
 export function normalizeVersionStatus(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("version payload is not an object");

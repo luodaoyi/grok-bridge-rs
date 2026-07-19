@@ -3,11 +3,25 @@
 :root {
   color-scheme: dark;
   font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC",
-    system-ui, sans-serif;
+    "Segoe UI", system-ui, sans-serif;
   color: #edf3f0;
   background: #0b0d0c;
   font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
   --page-bg: #0b0d0c;
+  --page-glow: radial-gradient(
+      1200px 500px at 10% -10%,
+      rgba(45, 212, 191, 0.08),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 400px at 90% 0%,
+      rgba(56, 189, 248, 0.05),
+      transparent 50%
+    );
   --text: #edf3f0;
   --strong: #f7faf8;
   --muted: #aeb8b3;
@@ -19,7 +33,15 @@
   --border: #343a38;
   --open-border: #4e756b;
   --runtime-ok: #a7f3d0;
+  --runtime-ok-bg: rgba(16, 185, 129, 0.12);
+  --runtime-ok-border: rgba(52, 211, 153, 0.35);
+  --runtime-warn: #fde68a;
+  --runtime-warn-bg: rgba(245, 158, 11, 0.12);
+  --runtime-warn-border: rgba(251, 191, 36, 0.35);
   --runtime-error: #fecdd3;
+  --runtime-error-bg: rgba(244, 63, 94, 0.12);
+  --runtime-error-border: rgba(251, 113, 133, 0.35);
+  --terminal-selection: rgba(94, 234, 212, 0.35);
   --button-bg: #191d1c;
   --button-text: #e3ebe7;
   --button-border: #3f4743;
@@ -41,6 +63,12 @@
   --pill-bg: #142721;
   --pill-border: #416b60;
   --session-bg: #161a18;
+  --session-open-bg: #171c1a;
+  --meta-bg: #121614;
+  --meta-border: #2a312e;
+  --supervisor-icon-bg: #142721;
+  --supervisor-icon-border: #416b60;
+  --subagent-icon-bg: #15201d;
   --done-bg: #15372f;
   --done-text: #86efac;
   --working-bg: #14353a;
@@ -51,16 +79,30 @@
   --stopped-text: #fda4af;
   --unknown-bg: #302b3b;
   --unknown-text: #ddd6fe;
+  --connected-bg: #15372f;
+  --connected-text: #86efac;
+  --disconnected-bg: #3a2a12;
+  --disconnected-text: #fdba74;
+  --cleanup-bg: #3b1921;
+  --cleanup-text: #fda4af;
+  --unmanaged-bg: #2a3035;
+  --unmanaged-text: #cbd5e1;
   --code-text: #a5f3fc;
   --waiting-note-bg: #2d2513;
   --waiting-note-border: #fbbf24;
   --terminal-bg: #050706;
   --terminal-border: #2b302e;
   --terminal-text: #d1fae5;
+  --terminal-inset: rgba(255, 255, 255, 0.03);
   --empty-border: #47514c;
   --theme-control-bg: #111412;
   --theme-active-bg: #d1fae5;
   --theme-active-text: #0b0d0c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.35);
+  --skip-bg: #0f766e;
+  --skip-text: #ecfdf5;
 }
 
 :root[data-resolved-theme="light"] {
@@ -68,6 +110,16 @@
   color: #17201d;
   background: #f7f9f8;
   --page-bg: #f7f9f8;
+  --page-glow: radial-gradient(
+      1200px 500px at 10% -10%,
+      rgba(13, 148, 136, 0.08),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 400px at 90% 0%,
+      rgba(14, 165, 233, 0.06),
+      transparent 50%
+    );
   --text: #17201d;
   --strong: #101714;
   --muted: #53625c;
@@ -79,7 +131,15 @@
   --border: #c9d1ce;
   --open-border: #53877a;
   --runtime-ok: #047857;
+  --runtime-ok-bg: rgba(16, 185, 129, 0.1);
+  --runtime-ok-border: rgba(5, 150, 105, 0.28);
+  --runtime-warn: #b45309;
+  --runtime-warn-bg: rgba(245, 158, 11, 0.12);
+  --runtime-warn-border: rgba(217, 119, 6, 0.28);
   --runtime-error: #be123c;
+  --runtime-error-bg: rgba(244, 63, 94, 0.08);
+  --runtime-error-border: rgba(225, 29, 72, 0.28);
+  --terminal-selection: rgba(15, 118, 110, 0.28);
   --button-bg: #ffffff;
   --button-text: #26332e;
   --button-border: #b8c3bf;
@@ -101,6 +161,12 @@
   --pill-bg: #e8f7f1;
   --pill-border: #6cae9d;
   --session-bg: #ffffff;
+  --session-open-bg: #fbfcfc;
+  --meta-bg: #f7faf9;
+  --meta-border: #d9e1de;
+  --supervisor-icon-bg: #e8f7f1;
+  --supervisor-icon-border: #6cae9d;
+  --subagent-icon-bg: #eef6f3;
   --done-bg: #dcfce7;
   --done-text: #166534;
   --working-bg: #cffafe;
@@ -111,16 +177,30 @@
   --stopped-text: #9f1239;
   --unknown-bg: #f3e8ff;
   --unknown-text: #6b21a8;
+  --connected-bg: #dcfce7;
+  --connected-text: #166534;
+  --disconnected-bg: #ffedd5;
+  --disconnected-text: #9a3412;
+  --cleanup-bg: #ffe4e6;
+  --cleanup-text: #9f1239;
+  --unmanaged-bg: #e2e8f0;
+  --unmanaged-text: #334155;
   --code-text: #0e7490;
   --waiting-note-bg: #fffbeb;
   --waiting-note-border: #d97706;
   --terminal-bg: #f8faf9;
   --terminal-border: #c7d1cd;
   --terminal-text: #17201d;
+  --terminal-inset: rgba(0, 0, 0, 0.03);
   --empty-border: #aebbb6;
   --theme-control-bg: #edf2f0;
   --theme-active-bg: #17201d;
   --theme-active-text: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 20, 0.06);
+  --shadow-md: 0 8px 24px rgba(15, 23, 20, 0.08);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 20, 0.1);
+  --skip-bg: #0f766e;
+  --skip-text: #ecfdf5;
 }
 
 * {
@@ -137,12 +217,38 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--page-bg);
+  background-image: var(--page-glow);
+  background-attachment: fixed;
   color: var(--text);
 }
 
 button,
 summary {
   -webkit-tap-highlight-color: transparent;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -3rem;
+  z-index: 50;
+  border-radius: 0.5rem;
+  background: var(--skip-bg);
+  color: var(--skip-text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .badge-working {
@@ -168,4 +274,69 @@ summary {
 .badge-unknown {
   background: var(--unknown-bg);
   color: var(--unknown-text);
+}
+
+.badge-connected {
+  background: var(--connected-bg);
+  color: var(--connected-text);
+}
+
+.badge-disconnected {
+  background: var(--disconnected-bg);
+  color: var(--disconnected-text);
+}
+
+.badge-cleanup {
+  background: var(--cleanup-bg);
+  color: var(--cleanup-text);
+}
+
+.badge-unmanaged {
+  background: var(--unmanaged-bg);
+  color: var(--unmanaged-text);
+}
+
+.stat-working strong {
+  color: var(--working-text);
+}
+
+.stat-waiting strong {
+  color: var(--waiting-text);
+}
+
+.stat-done strong {
+  color: var(--done-text);
+}
+
+.terminal-shell {
+  font-variant-ligatures: none;
+  font-feature-settings: "tnum" 1;
+}
+
+.terminal-xterm .xterm {
+  height: 100%;
+  padding: 0;
+}
+
+.terminal-xterm .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.terminal-xterm .xterm-screen {
+  font-variant-ligatures: none;
+}
+
+.terminal-xterm:focus-visible {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

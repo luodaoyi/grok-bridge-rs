@@ -293,6 +293,64 @@ pub(crate) struct ReadResult {
     pub(crate) eof: bool,
 }
 
+/// Read-only WebUI `/api/events` stream frame.
+/// Wire contract: `{ type: "sessions", sessions: [...], terminals: [...] }`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WebEventsMessage {
+    #[serde(rename = "type")]
+    pub(crate) message_type: String,
+    pub(crate) sessions: Vec<SessionState>,
+    pub(crate) terminals: Vec<TerminalStreamEntry>,
+}
+
+impl WebEventsMessage {
+    pub(crate) fn sessions(
+        sessions: Vec<SessionState>,
+        terminals: Vec<TerminalStreamEntry>,
+    ) -> Self {
+        Self {
+            message_type: "sessions".to_owned(),
+            sessions,
+            terminals,
+        }
+    }
+}
+
+/// One terminal payload inside a `WebEventsMessage`.
+/// `reset=true` carries a full ANSI snapshot; `reset=false` is raw PTY delta.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TerminalStreamEntry {
+    pub(crate) session: String,
+    pub(crate) reset: bool,
+    pub(crate) cursor: u64,
+    pub(crate) next_cursor: u64,
+    pub(crate) data_base64: String,
+}
+
+impl TerminalStreamEntry {
+    pub(crate) fn reset_snapshot(state: &SessionState) -> Self {
+        Self {
+            session: state.session.clone(),
+            reset: true,
+            cursor: 0,
+            next_cursor: state.last_cursor,
+            data_base64: state.screen_ansi_base64.clone(),
+        }
+    }
+
+    pub(crate) fn delta(read: &ReadResult) -> Self {
+        Self {
+            session: read.session.clone(),
+            reset: false,
+            cursor: read.cursor,
+            next_cursor: read.next_cursor,
+            data_base64: read.data_base64.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WaitResult {
@@ -1110,5 +1168,70 @@ mod tests {
             }),
         );
         assert!(decode_response(&encode_frame(&invalid_wait).unwrap()).is_err());
+    }
+
+    #[test]
+    fn serializes_web_events_message_wire_contract() {
+        let session = SessionState {
+            session: "gbt-1".to_owned(),
+            owner: None,
+            client_session_id: None,
+            client_state: ClientLeaseState::Unmanaged,
+            client_last_seen_at_ms: None,
+            orphaned_at_ms: None,
+            auto_close_at_ms: None,
+            phase: SessionPhase::Idle,
+            title: None,
+            cwd: "/tmp".to_owned(),
+            model: None,
+            always_approve: false,
+            process_id: None,
+            screen: Some("hi".to_owned()),
+            rows: 36,
+            cols: 120,
+            screen_ansi_base64: BASE64.encode(b"ansi"),
+            last_cursor: 7,
+            last_output_at_ms: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            exit_code: None,
+            error: None,
+            activity: HookActivity::Unknown,
+            hook_event: None,
+            hook_at_ms: None,
+            tool_name: None,
+            waiting_reason: None,
+        };
+        let reset = TerminalStreamEntry::reset_snapshot(&session);
+        assert!(reset.reset);
+        assert_eq!(reset.cursor, 0);
+        assert_eq!(reset.next_cursor, 7);
+        assert_eq!(reset.data_base64, session.screen_ansi_base64);
+
+        let delta = TerminalStreamEntry::delta(&ReadResult {
+            session: "gbt-1".to_owned(),
+            cursor: 3,
+            next_cursor: 5,
+            data_base64: BASE64.encode(b"xy"),
+            plain_text: None,
+            screen: None,
+            truncated: false,
+            eof: false,
+        });
+        assert!(!delta.reset);
+        assert_eq!(delta.cursor, 3);
+        assert_eq!(delta.next_cursor, 5);
+
+        let message = WebEventsMessage::sessions(vec![session], vec![reset, delta]);
+        let value = serde_json::to_value(&message).unwrap();
+        assert_eq!(value["type"], "sessions");
+        assert!(value["sessions"].is_array());
+        assert_eq!(value["terminals"][0]["reset"], true);
+        assert_eq!(value["terminals"][0]["next_cursor"], 7);
+        assert_eq!(value["terminals"][1]["reset"], false);
+        assert_eq!(value["terminals"][1]["cursor"], 3);
+        let round_trip: WebEventsMessage = serde_json::from_value(value).unwrap();
+        assert_eq!(round_trip.message_type, "sessions");
+        assert_eq!(round_trip.terminals.len(), 2);
     }
 }

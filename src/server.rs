@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     io::{BufRead, BufReader, ErrorKind, Write},
     net::{TcpListener, TcpStream},
@@ -12,6 +13,11 @@ use std::{
 
 use anyhow::{Context, Result};
 use interprocess::local_socket::{ListenerOptions, Stream, prelude::*};
+use tungstenite::{
+    Message, WebSocket,
+    handshake::derive_accept_key,
+    protocol::{Role, WebSocketConfig},
+};
 
 use crate::{
     protocol::{
@@ -22,6 +28,9 @@ use crate::{
     transport::{call_anonymous, read_frame, runtime_name, write_response},
     version_check::{CHECK_INTERVAL, VersionChecker},
 };
+
+/// Bound WebSocket text/binary payload size (server and client).
+const WEB_EVENTS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn run() -> Result<()> {
     let name = runtime_name()?;
@@ -256,6 +265,7 @@ fn run_orphan_reaper(state: Arc<RuntimeState>) {
         if state.stopping.load(Ordering::Acquire) {
             return;
         }
+        // Only real close/removal paths notify the WebUI revision bus.
         if let Err(error) = state.host.reap_orphans() {
             eprintln!("grok-bridge server: orphan cleanup failed: {error:#}");
         }
@@ -320,7 +330,7 @@ fn run_web_ui(listener: TcpListener, state: Arc<RuntimeState>) {
 }
 
 fn handle_web_connection(mut stream: TcpStream, state: Arc<RuntimeState>) {
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
         Err(error) => {
@@ -333,14 +343,20 @@ fn handle_web_connection(mut stream: TcpStream, state: Arc<RuntimeState>) {
             return;
         }
     };
-    let (method, path, bridge_header) = request;
-    if method == "GET"
-        && let Some(asset) = static_web_asset(&path)
+    if request.method == "GET" && request.path == "/api/events" {
+        handle_events_websocket(stream, state, request);
+        return;
+    }
+    if request.method == "GET"
+        && let Some(asset) = static_web_asset(&request.path)
     {
         let _ = write_http_bytes(&mut stream, "200 OK", asset.content_type, asset.body);
         return;
     }
-    match (method.as_str(), path.as_str()) {
+    let method = request.method.as_str();
+    let path = request.path.as_str();
+    let bridge_header = request.bridge_header;
+    match (method, path) {
         ("GET", "/api/sessions") => match state.host.list_web().and_then(|sessions| {
             serde_json::to_string(&sessions).context("failed to encode WebUI sessions")
         }) {
@@ -524,6 +540,277 @@ fn handle_web_connection(mut stream: TcpStream, state: Arc<RuntimeState>) {
     }
 }
 
+fn handle_events_websocket(
+    mut stream: TcpStream,
+    state: Arc<RuntimeState>,
+    request: ParsedHttpRequest,
+) {
+    if let Err(error) = validate_events_websocket_request(&request) {
+        let status = if error.starts_with("origin") {
+            "403 Forbidden"
+        } else {
+            "400 Bad Request"
+        };
+        let _ = write_http(&mut stream, status, "text/plain; charset=utf-8", &error);
+        return;
+    }
+    let key = request
+        .sec_websocket_key
+        .as_deref()
+        .expect("validated websocket key");
+    let accept = derive_accept_key(key.as_bytes());
+    if write!(
+        stream,
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    )
+    .is_err()
+    {
+        return;
+    }
+    // Host Condvar is the primary sleep; keep socket reads short so a quiet
+    // client socket cannot delay event pushes after a revision wake-up.
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(WEB_EVENTS_MAX_MESSAGE_BYTES);
+    config.max_frame_size = Some(WEB_EVENTS_MAX_MESSAGE_BYTES);
+    // Eager writes so session events are not stuck in the 128 KiB default buffer.
+    config.write_buffer_size = 0;
+    config.read_buffer_size = 8 * 1024;
+    let mut websocket = WebSocket::from_raw_socket(stream, Role::Server, Some(config));
+    run_events_websocket(&mut websocket, &state);
+}
+
+fn run_events_websocket(websocket: &mut WebSocket<TcpStream>, state: &RuntimeState) {
+    let mut cursors = HashMap::new();
+    let mut seen_revision = state.host.revision();
+    if !send_web_events(websocket, state, &mut cursors, true) {
+        return;
+    }
+
+    while !state.stopping.load(Ordering::Acquire) {
+        let now = now_millis();
+        let lease_deadline = state
+            .host
+            .next_client_lifecycle_deadline_ms()
+            .ok()
+            .flatten();
+        // Sleep until the next real host revision *or* the next pure-time lease
+        // transition. Cap only so stopping is observed; timeouts without either
+        // signal never push frames.
+        let wait = match lease_deadline {
+            Some(deadline) if deadline > now => Duration::from_millis(deadline - now)
+                .min(Duration::from_secs(30))
+                .max(Duration::from_millis(1)),
+            Some(_) => Duration::from_millis(1),
+            None => Duration::from_secs(5),
+        };
+        let current = state.host.wait_revision(seen_revision, wait);
+        match poll_websocket_client(websocket) {
+            WsClientAction::Continue => {}
+            WsClientAction::Close => return,
+        }
+        if state.stopping.load(Ordering::Acquire) {
+            break;
+        }
+        let now_after = now_millis();
+        let lease_due = lease_deadline.is_some_and(|deadline| now_after >= deadline);
+        if current == seen_revision && !lease_due {
+            continue;
+        }
+        if current != seen_revision {
+            seen_revision = current;
+        }
+        if !send_web_events(websocket, state, &mut cursors, false) {
+            return;
+        }
+    }
+
+    let _ = websocket.close(None);
+}
+
+/// Plan frames from immutable cursors, send each frame, and commit cursor
+/// advances only after that frame is successfully written. Oversize/encode
+/// failures never advance cursors and never silently drop committed bytes.
+fn send_web_events(
+    websocket: &mut WebSocket<TcpStream>,
+    state: &RuntimeState,
+    cursors: &mut HashMap<String, u64>,
+    force_reset: bool,
+) -> bool {
+    let frames =
+        match state
+            .host
+            .plan_web_events(cursors, force_reset, WEB_EVENTS_MAX_MESSAGE_BYTES)
+        {
+            Ok(frames) => frames,
+            Err(error) => {
+                eprintln!("grok-bridge server: WebUI events plan failed: {error:#}");
+                return true;
+            }
+        };
+
+    for frame in frames {
+        let payload = match serde_json::to_string(&frame.message) {
+            Ok(payload) => payload,
+            Err(error) => {
+                eprintln!("grok-bridge server: WebUI events encode failed: {error}");
+                // Do not commit any remaining planned cursors.
+                return true;
+            }
+        };
+        if payload.len() > WEB_EVENTS_MAX_MESSAGE_BYTES {
+            eprintln!(
+                "grok-bridge server: WebUI events frame exceeds {} bytes; leaving cursors uncommitted",
+                WEB_EVENTS_MAX_MESSAGE_BYTES
+            );
+            return true;
+        }
+        if websocket
+            .send(Message::text(payload))
+            .and_then(|()| websocket.flush())
+            .is_err()
+        {
+            return false;
+        }
+        for (session, cursor) in frame.cursor_commits {
+            cursors.insert(session, cursor);
+        }
+        for session in frame.cursor_drops {
+            cursors.remove(&session);
+        }
+    }
+    true
+}
+
+enum WsClientAction {
+    Continue,
+    Close,
+}
+
+fn poll_websocket_client(websocket: &mut WebSocket<TcpStream>) -> WsClientAction {
+    // Drain a bounded number of control/application frames so a noisy client
+    // cannot pin this connection thread forever.
+    for _ in 0..32 {
+        match websocket.read() {
+            Ok(Message::Ping(payload)) => {
+                if websocket.send(Message::Pong(payload)).is_err() {
+                    return WsClientAction::Close;
+                }
+            }
+            Ok(Message::Pong(_)) => {}
+            Ok(Message::Close(_)) => {
+                let _ = websocket.close(None);
+                return WsClientAction::Close;
+            }
+            // Read-only stream: ignore application data; never forward to PTY.
+            Ok(Message::Text(_)) | Ok(Message::Binary(_)) | Ok(Message::Frame(_)) => {}
+            Err(tungstenite::Error::Io(error))
+                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
+            {
+                return WsClientAction::Continue;
+            }
+            Err(tungstenite::Error::ConnectionClosed)
+            | Err(tungstenite::Error::AlreadyClosed)
+            | Err(tungstenite::Error::Protocol(_)) => {
+                return WsClientAction::Close;
+            }
+            Err(_) => return WsClientAction::Close,
+        }
+    }
+    WsClientAction::Continue
+}
+
+fn validate_events_websocket_request(request: &ParsedHttpRequest) -> Result<(), String> {
+    if request.method != "GET" {
+        return Err("WebSocket upgrade requires GET".to_owned());
+    }
+    if request.path != "/api/events" {
+        return Err("WebSocket path must be /api/events".to_owned());
+    }
+    if !request.upgrade_websocket || !request.connection_upgrade {
+        return Err("missing WebSocket upgrade headers".to_owned());
+    }
+    if request.sec_websocket_version.as_deref() != Some("13") {
+        return Err("unsupported Sec-WebSocket-Version".to_owned());
+    }
+    let key = request
+        .sec_websocket_key
+        .as_deref()
+        .ok_or_else(|| "missing Sec-WebSocket-Key".to_owned())?;
+    if !sec_websocket_key_valid(key) {
+        return Err("invalid Sec-WebSocket-Key".to_owned());
+    }
+    if !web_origin_allowed(request.origin.as_deref(), request.host.as_deref()) {
+        return Err("origin not allowed".to_owned());
+    }
+    Ok(())
+}
+
+/// RFC 6455: Sec-WebSocket-Key is a base64-encoded value that decodes to 16 bytes.
+fn sec_websocket_key_valid(key: &str) -> bool {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    let key = key.trim();
+    if key.is_empty() {
+        return false;
+    }
+    match BASE64.decode(key) {
+        Ok(bytes) => bytes.len() == 16,
+        Err(_) => false,
+    }
+}
+
+/// Same-origin browser Origin on a loopback Host only.
+fn web_origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
+    let Some(origin) = origin.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let Some(host) = host.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let Some(origin_authority) = http_origin_authority(origin) else {
+        return false;
+    };
+    if !authority_is_loopback(&origin_authority) || !authority_is_loopback(host) {
+        return false;
+    }
+    authority_eq(&origin_authority, host)
+}
+
+fn http_origin_authority(origin: &str) -> Option<String> {
+    let rest = origin.strip_prefix("http://")?;
+    if rest.is_empty() || rest.contains('/') || rest.contains('?') || rest.contains('#') {
+        return None;
+    }
+    Some(rest.to_owned())
+}
+
+fn authority_is_loopback(authority: &str) -> bool {
+    let host = authority_host(authority);
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
+fn authority_host(authority: &str) -> &str {
+    if authority.starts_with('[') {
+        if let Some(end) = authority.find(']') {
+            return &authority[..=end];
+        }
+        return authority;
+    }
+    if let Some((host, port)) = authority.rsplit_once(':')
+        && !host.is_empty()
+        && port.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return host;
+    }
+    authority
+}
+
+fn authority_eq(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
 fn close_path_segment<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     let segment = path.strip_prefix(prefix)?.strip_suffix("/close")?;
     if segment.contains('/') || segment.contains('?') {
@@ -564,9 +851,20 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn read_http_request(
-    stream: &mut TcpStream,
-) -> std::result::Result<(String, String, bool), String> {
+#[derive(Clone)]
+struct ParsedHttpRequest {
+    method: String,
+    path: String,
+    bridge_header: bool,
+    host: Option<String>,
+    origin: Option<String>,
+    upgrade_websocket: bool,
+    connection_upgrade: bool,
+    sec_websocket_key: Option<String>,
+    sec_websocket_version: Option<String>,
+}
+
+fn read_http_request(stream: &mut TcpStream) -> std::result::Result<ParsedHttpRequest, String> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader
@@ -576,6 +874,12 @@ fn read_http_request(
     let method = parts.next().ok_or("missing HTTP method")?.to_owned();
     let path = parts.next().ok_or("missing HTTP path")?.to_owned();
     let mut bridge_header = false;
+    let mut host = None;
+    let mut origin = None;
+    let mut upgrade_websocket = false;
+    let mut connection_upgrade = false;
+    let mut sec_websocket_key = None;
+    let mut sec_websocket_version = None;
     loop {
         line.clear();
         reader
@@ -584,11 +888,41 @@ fn read_http_request(
         if line == "\r\n" || line == "\n" || line.is_empty() {
             break;
         }
-        if line.trim().eq_ignore_ascii_case("X-Grok-Bridge-WebUI: 1") {
+        let header = line.trim_end_matches(['\r', '\n']);
+        let Some((name, value)) = header.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("X-Grok-Bridge-WebUI") && value == "1" {
             bridge_header = true;
+        } else if name.eq_ignore_ascii_case("Host") {
+            host = Some(value.to_owned());
+        } else if name.eq_ignore_ascii_case("Origin") {
+            origin = Some(value.to_owned());
+        } else if name.eq_ignore_ascii_case("Upgrade") && value.eq_ignore_ascii_case("websocket") {
+            upgrade_websocket = true;
+        } else if name.eq_ignore_ascii_case("Connection") {
+            connection_upgrade = value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"));
+        } else if name.eq_ignore_ascii_case("Sec-WebSocket-Key") {
+            sec_websocket_key = Some(value.to_owned());
+        } else if name.eq_ignore_ascii_case("Sec-WebSocket-Version") {
+            sec_websocket_version = Some(value.to_owned());
         }
     }
-    Ok((method, path, bridge_header))
+    Ok(ParsedHttpRequest {
+        method,
+        path,
+        bridge_header,
+        host,
+        origin,
+        upgrade_websocket,
+        connection_upgrade,
+        sec_websocket_key,
+        sec_websocket_version,
+    })
 }
 
 fn write_http(
@@ -789,6 +1123,124 @@ mod tests {
         );
         assert!(response.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
         assert!(response.ends_with(b"missing WebUI request header"));
+    }
+
+    #[test]
+    fn web_origin_requires_matching_loopback_host() {
+        assert!(web_origin_allowed(
+            Some("http://127.0.0.1:47653"),
+            Some("127.0.0.1:47653")
+        ));
+        assert!(web_origin_allowed(
+            Some("http://localhost:47653"),
+            Some("localhost:47653")
+        ));
+        assert!(!web_origin_allowed(
+            Some("http://evil.example:47653"),
+            Some("127.0.0.1:47653")
+        ));
+        assert!(!web_origin_allowed(
+            Some("http://127.0.0.1:47653"),
+            Some("127.0.0.1:9")
+        ));
+        assert!(!web_origin_allowed(None, Some("127.0.0.1:47653")));
+        assert!(!web_origin_allowed(
+            Some("https://127.0.0.1:47653"),
+            Some("127.0.0.1:47653")
+        ));
+    }
+
+    #[test]
+    fn events_websocket_handshake_rejects_bad_origin_and_path() {
+        let missing_upgrade = ParsedHttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/events".to_owned(),
+            bridge_header: false,
+            host: Some("127.0.0.1:47653".to_owned()),
+            origin: Some("http://127.0.0.1:47653".to_owned()),
+            upgrade_websocket: false,
+            connection_upgrade: false,
+            sec_websocket_key: Some("dGhlIHNhbXBsZSBub25jZQ==".to_owned()),
+            sec_websocket_version: Some("13".to_owned()),
+        };
+        assert!(validate_events_websocket_request(&missing_upgrade).is_err());
+
+        let bad_origin = ParsedHttpRequest {
+            upgrade_websocket: true,
+            connection_upgrade: true,
+            origin: Some("http://evil.example".to_owned()),
+            ..missing_upgrade.clone()
+        };
+        assert_eq!(
+            validate_events_websocket_request(&bad_origin).unwrap_err(),
+            "origin not allowed"
+        );
+
+        let bad_path = ParsedHttpRequest {
+            path: "/api/sessions".to_owned(),
+            upgrade_websocket: true,
+            connection_upgrade: true,
+            origin: Some("http://127.0.0.1:47653".to_owned()),
+            ..missing_upgrade
+        };
+        assert!(validate_events_websocket_request(&bad_path).is_err());
+    }
+
+    #[test]
+    fn events_websocket_handshake_accepts_same_origin_loopback() {
+        let request = ParsedHttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/events".to_owned(),
+            bridge_header: false,
+            host: Some("127.0.0.1:47653".to_owned()),
+            origin: Some("http://127.0.0.1:47653".to_owned()),
+            upgrade_websocket: true,
+            connection_upgrade: true,
+            sec_websocket_key: Some("dGhlIHNhbXBsZSBub25jZQ==".to_owned()),
+            sec_websocket_version: Some("13".to_owned()),
+        };
+        assert!(validate_events_websocket_request(&request).is_ok());
+    }
+
+    #[test]
+    fn sec_websocket_key_must_be_rfc6455_16_byte_base64() {
+        // RFC 6455 example key decodes to 16 bytes.
+        assert!(sec_websocket_key_valid("dGhlIHNhbXBsZSBub25jZQ=="));
+        assert!(!sec_websocket_key_valid(""));
+        assert!(!sec_websocket_key_valid("   "));
+        assert!(!sec_websocket_key_valid("not-base64!!!"));
+        // Valid base64 but wrong decoded length (3 bytes).
+        assert!(!sec_websocket_key_valid("YWJj"));
+        // Valid base64 of 15 bytes.
+        assert!(!sec_websocket_key_valid("AAAAAAAAAAAAAAAAAAAA"));
+        // Valid base64 of 17 bytes.
+        assert!(!sec_websocket_key_valid("AQIDBAUGBwgJCgsMDQ4PEBE="));
+
+        let mut request = ParsedHttpRequest {
+            method: "GET".to_owned(),
+            path: "/api/events".to_owned(),
+            bridge_header: false,
+            host: Some("127.0.0.1:47653".to_owned()),
+            origin: Some("http://127.0.0.1:47653".to_owned()),
+            upgrade_websocket: true,
+            connection_upgrade: true,
+            sec_websocket_key: Some("YWJj".to_owned()),
+            sec_websocket_version: Some("13".to_owned()),
+        };
+        assert_eq!(
+            validate_events_websocket_request(&request).unwrap_err(),
+            "invalid Sec-WebSocket-Key"
+        );
+        request.sec_websocket_key = Some("dGhlIHNhbXBsZSBub25jZQ==".to_owned());
+        assert!(validate_events_websocket_request(&request).is_ok());
+    }
+
+    #[test]
+    fn events_api_without_upgrade_stays_http_error() {
+        let response = serve_web_request(
+            b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:47653\r\nOrigin: http://127.0.0.1:47653\r\n\r\n",
+        );
+        assert!(response.starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
     }
 
     #[test]

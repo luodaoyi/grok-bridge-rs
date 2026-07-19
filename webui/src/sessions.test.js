@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   activityOf,
+  clientLifecycle,
+  dominantClientState,
   groupSessions,
   groupSummary,
   ownerKey,
@@ -72,5 +74,31 @@ describe("session grouping", () => {
       done: 1,
     });
     expect(groupSummary(groupSessions(sessions)[1][1])).toBe("1 个等待输入");
+  });
+});
+
+describe("client lifecycle", () => {
+  it("maps lease states into connected/disconnected/cleanup visuals", () => {
+    expect(clientLifecycle("connected")).toBe("connected");
+    expect(clientLifecycle("disconnected")).toBe("disconnected");
+    expect(clientLifecycle("orphaned")).toBe("cleanup");
+    expect(clientLifecycle("closing")).toBe("cleanup");
+    expect(clientLifecycle("unmanaged")).toBe("unmanaged");
+  });
+
+  it("picks the dominant client state for a supervisor group", () => {
+    expect(
+      dominantClientState([
+        { client_state: "connected" },
+        { client_state: "disconnected" },
+        { client_state: "orphaned" },
+      ]),
+    ).toBe("orphaned");
+    expect(
+      dominantClientState([
+        { client_state: "connected" },
+        { client_state: "unmanaged" },
+      ]),
+    ).toBe("connected");
   });
 });

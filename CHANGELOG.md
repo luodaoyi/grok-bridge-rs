@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 - 2026-07-19
+
+- Replaced the WebUI's two-second session polling with a same-origin, read-only WebSocket event stream that pushes lifecycle changes and bounded terminal deltas as they happen.
+- Replaced terminal text snapshots with an input-disabled xterm.js terminal that restores ANSI state, applies ordered incremental output, supports selection and copy, and keeps live buffers bounded.
+- Redesigned the WebUI in light and dark themes, added reconnect state and controls, and documented both themes with screenshots in the README.
+- Updated the Grok Build Skill workflow so Codex can keep persistent Grok sessions as delegated workers, inspect their evidence, and send focused follow-up tasks.
+
 ## 0.6.2 - 2026-07-17
 
 - Added Runtime self-check for newer GitHub releases on a background interval, exposed through `GET /api/version` for the WebUI.

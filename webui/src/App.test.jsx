@@ -1,6 +1,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockXTerm } from "./test/mockXterm.js";
+import { installMockWebSocket, MockWebSocket } from "./test/mockWebSocket.js";
+import { resetTerminalFeeds } from "./utils/terminalFeeds.js";
+
+vi.mock("@xterm/xterm", () => ({
+  Terminal: MockXTerm,
+}));
+
 import App from "./App.jsx";
 
 const sessions = [
@@ -19,6 +27,8 @@ const sessions = [
     hook_at_ms: Date.now(),
     tool_name: "edit",
     waiting_reason: null,
+    rows: 24,
+    cols: 80,
     screen: "正在修改 app.js",
   },
   {
@@ -36,9 +46,18 @@ const sessions = [
     hook_at_ms: null,
     tool_name: null,
     waiting_reason: null,
+    rows: 24,
+    cols: 80,
     screen: "done",
   },
 ];
+
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(String(text ?? ""));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
 function jsonResponse(value) {
   return new Response(JSON.stringify(value), {
@@ -71,9 +90,10 @@ function mockFetch(handlers = {}) {
         handlers.closeResult ?? { matched: 1, closed: 1, failures: [] },
       );
     }
-    if (handlers.sessions instanceof Response) return handlers.sessions;
-    if (typeof handlers.sessions === "function") return handlers.sessions(path);
-    return jsonResponse(handlers.sessions ?? sessions);
+    if (path.includes("/api/sessions")) {
+      throw new Error("GET /api/sessions must not be used by WebUI stream");
+    }
+    return jsonResponse({});
   });
 }
 
@@ -85,12 +105,23 @@ async function settle() {
   });
 }
 
+function pushSessions(ws, nextSessions, terminals = []) {
+  ws.emitMessage({
+    type: "sessions",
+    sessions: nextSessions,
+    terminals,
+  });
+}
+
 describe("App", () => {
   let container;
   let root;
 
   beforeEach(() => {
     vi.useFakeTimers();
+    MockXTerm.reset();
+    resetTerminalFeeds();
+    installMockWebSocket();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.spyOn(window, "matchMedia").mockReturnValue({
       matches: false,
@@ -107,27 +138,48 @@ describe("App", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    resetTerminalFeeds();
+    MockXTerm.reset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  async function renderApp() {
+  async function renderAppAndConnect(messageSessions = sessions, terminals) {
     await act(async () => root.render(<App />));
     await settle();
+    const ws = MockWebSocket.instances[0];
+    await act(async () => ws.open());
+    const defaultTerminals =
+      terminals ??
+      messageSessions.map((session) => ({
+        session: session.session,
+        reset: true,
+        cursor: 0,
+        next_cursor: 4,
+        data_base64: utf8ToBase64(session.screen || session.session),
+      }));
+    await act(async () => pushSessions(ws, messageSessions, defaultTerminals));
+    await settle();
+    return ws;
   }
 
-  it("renders owner groups, stats, terminal context and no unowned batch close", async () => {
-    await renderApp();
+  it("renders supervisor/subagent groups, stats, terminal shells and no unowned batch close", async () => {
+    await renderAppAndConnect();
     expect(container.textContent).toContain("Codex A/中文");
-    expect(container.textContent).toContain("正在修改 app.js");
     expect(container.textContent).toContain("未标记的 Codex 对话");
+    expect(container.textContent).toContain("监督者");
+    expect(container.textContent).toContain("子代理");
     expect(container.textContent).toContain("GitHub");
     expect(container.textContent).toContain("Runtime v0.6.1");
+    expect(container.textContent).toContain("实时通道已连接");
+    expect(container.textContent).toContain("WebSocket");
     expect(
       container.querySelector('a[href="https://github.com/luodaoyi/grok-bridge-rs"]'),
     ).not.toBeNull();
     expect(container.querySelectorAll("details.group")).toHaveLength(2);
     expect(container.querySelectorAll("details.session")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-terminal]")).toHaveLength(2);
+    expect(container.querySelector('[href="#session-board"]')).not.toBeNull();
     expect(container.querySelectorAll("button")).toSatisfy((buttons) =>
       [...buttons].some((button) =>
         button.textContent.includes("关闭该 Codex 全部 Grok"),
@@ -138,10 +190,16 @@ describe("App", () => {
         .find((group) => group.dataset.ownerKey === "missing-owner")
         .textContent,
     ).not.toContain("关闭该 Codex 全部 Grok");
+    expect(MockXTerm.instances.every((term) => term.options.disableStdin)).toBe(
+      true,
+    );
   });
 
-  it("collapses and expands all owner groups and session cards", async () => {
-    await renderApp();
+  it("keeps xterm instances mounted across collapse so continuous output is preserved", async () => {
+    await renderAppAndConnect();
+    expect(MockXTerm.instances).toHaveLength(2);
+    const before = MockXTerm.instances.slice();
+
     const button = (text) =>
       [...container.querySelectorAll("button")].find((item) =>
         item.textContent.includes(text),
@@ -152,24 +210,26 @@ describe("App", () => {
         (group) => !group.open,
       ),
     ).toBe(true);
-    expect(container.querySelectorAll("pre")).toHaveLength(0);
+    // Terminal hosts remain mounted while sessions exist.
+    expect(container.querySelectorAll("[data-terminal]")).toHaveLength(2);
+    expect(MockXTerm.instances).toHaveLength(2);
+    expect(MockXTerm.instances[0]).toBe(before[0]);
+    expect(MockXTerm.instances[1]).toBe(before[1]);
+    expect(before.every((term) => !term.disposed)).toBe(true);
+
     await act(async () => button("全部展开").click());
-    expect(
-      [...container.querySelectorAll("details.group")].every(
-        (group) => group.open,
-      ),
-    ).toBe(true);
     expect(
       [...container.querySelectorAll("details.session")].every(
         (session) => session.open,
       ),
     ).toBe(true);
-    expect(container.querySelectorAll("pre")).toHaveLength(2);
   });
 
   it("can collapse a single Grok session without collapsing its Codex group", async () => {
-    await renderApp();
-    const session = container.querySelector('details.session[data-session="gbt-a"]');
+    await renderAppAndConnect();
+    const session = container.querySelector(
+      'details.session[data-session="gbt-a"]',
+    );
     expect(session.open).toBe(true);
     await act(async () => {
       session.open = false;
@@ -183,7 +243,7 @@ describe("App", () => {
       container.querySelector('details.group[data-owner-key="client:codex-a"]')
         .open,
     ).toBe(true);
-    expect(container.querySelectorAll("pre")).toHaveLength(1);
+    expect(container.querySelectorAll("[data-terminal]")).toHaveLength(2);
   });
 
   it("shows update banner with release link and allows dismiss", async () => {
@@ -199,7 +259,7 @@ describe("App", () => {
         },
       }),
     );
-    await renderApp();
+    await renderAppAndConnect();
     expect(container.textContent).toContain("发现新版本 v0.6.2");
     expect(
       container.querySelector(
@@ -217,43 +277,11 @@ describe("App", () => {
     );
   });
 
-  it("pauses polling while a close request is pending", async () => {
-    let resolveClose;
-    const pendingClose = new Promise((resolve) => {
-      resolveClose = resolve;
-    });
-    const baseFetch = mockFetch();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url, options) => {
-        if (String(url).includes("/close")) return pendingClose;
-        return baseFetch(url, options);
-      }),
-    );
-    await renderApp();
-    const initialCloseCalls = fetch.mock.calls.filter((call) =>
-      String(call[0]).includes("/close"),
+  it("posts session and owner close without forcing GET /api/sessions", async () => {
+    const ws = await renderAppAndConnect();
+    const sessionCallsBefore = fetch.mock.calls.filter((call) =>
+      String(call[0]).includes("/api/sessions"),
     ).length;
-
-    const sessionClose = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent.trim() === "关闭 Grok",
-    );
-    await act(async () => sessionClose.click());
-    expect(
-      fetch.mock.calls.filter((call) => String(call[0]).includes("/close")),
-    ).toHaveLength(initialCloseCalls + 1);
-
-    const callsDuringPending = fetch.mock.calls.length;
-    await act(async () => vi.advanceTimersByTimeAsync(4000));
-    expect(fetch.mock.calls.length).toBe(callsDuringPending);
-
-    await act(async () => resolveClose(new Response("", { status: 200 })));
-    await settle();
-    expect(fetch.mock.calls.length).toBeGreaterThan(callsDuringPending);
-  });
-
-  it("posts session and owner close requests with the bridge header", async () => {
-    await renderApp();
 
     const ownedGroup = [...container.querySelectorAll("details.group")].find(
       (group) => group.dataset.ownerKey === "client:codex-a",
@@ -284,54 +312,142 @@ describe("App", () => {
       }),
     );
     expect(container.textContent).toContain(
-      "已关闭 Codex“Codex A/中文”下的全部 1 个 Grok 会话。",
+      "已关闭 Codex“Codex A/中文”下的全部 1 个 Grok 会话",
     );
+
+    const sessionGets = fetch.mock.calls.filter(
+      (call) =>
+        String(call[0]).includes("/api/sessions") &&
+        !String(call[0]).includes("/close") &&
+        (!call[1] || call[1].method == null || call[1].method === "GET"),
+    );
+    expect(sessionGets).toHaveLength(sessionCallsBefore);
+
+    // State updates come from the pushed WebSocket stream.
+    await act(async () => {
+      pushSessions(ws, [sessions[1]], [
+        {
+          session: "gbt-unowned",
+          reset: true,
+          data_base64: utf8ToBase64("done"),
+        },
+      ]);
+    });
+    await settle();
+    expect(container.textContent).not.toContain("实现 TodoList");
   });
 
-  it("keeps polling after request failures and bad payloads", async () => {
-    let sessionCalls = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url) => {
-        if (String(url).includes("/api/version")) {
-          return jsonResponse({
-            current: "0.6.1",
-            update_available: false,
-            release_url:
-              "https://github.com/luodaoyi/grok-bridge-rs/releases/latest",
-          });
-        }
-        sessionCalls += 1;
-        if (sessionCalls === 1) return jsonResponse(sessions);
-        if (sessionCalls === 2) throw new Error("network down");
-        if (sessionCalls === 3) return jsonResponse({ broken: true });
-        return jsonResponse(sessions);
-      }),
+  it("disposes xterm when a session is removed from the stream", async () => {
+    const ws = await renderAppAndConnect();
+    expect(MockXTerm.instances).toHaveLength(2);
+    const hosts = [...container.querySelectorAll("[data-terminal]")];
+    const removedIndex = hosts.findIndex(
+      (host) => host.dataset.terminal === "gbt-a",
     );
-    await renderApp();
-    expect(container.textContent).toContain("正在修改 app.js");
+    const removed = MockXTerm.instances[removedIndex];
 
-    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await act(async () => {
+      pushSessions(ws, [sessions[1]], [
+        {
+          session: "gbt-unowned",
+          reset: false,
+          data_base64: utf8ToBase64("+"),
+        },
+      ]);
+    });
     await settle();
-    expect(container.textContent).toContain("读取 Runtime 状态失败");
-    expect(container.textContent).toContain("将自动重试");
-    expect(container.textContent).toContain("正在修改 app.js");
-
-    await act(async () => vi.advanceTimersByTimeAsync(2000));
-    await settle();
-    expect(container.textContent).toContain("将自动重试");
-
-    await act(async () => vi.advanceTimersByTimeAsync(2000));
-    await settle();
-    expect(container.textContent).toContain("本机服务已连接");
-    expect(container.textContent).toContain("正在修改 app.js");
+    expect(container.querySelectorAll("[data-terminal]")).toHaveLength(1);
+    expect(
+      MockXTerm.instances.filter((term) => !term.disposed),
+    ).toHaveLength(1);
+    if (removed) expect(removed.disposed).toBe(true);
   });
 
-  it("refreshes sessions every two seconds", async () => {
-    await renderApp();
-    const initialCalls = fetch.mock.calls.length;
-    await act(async () => vi.advanceTimersByTimeAsync(2000));
+  it("never issues two-second session polling fetches", async () => {
+    await renderAppAndConnect();
+    const before = fetch.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
     await settle();
-    expect(fetch.mock.calls.length).toBeGreaterThan(initialCalls);
+    const sessionPolls = fetch.mock.calls.slice(before).filter((call) => {
+      const url = String(call[0]);
+      return url.includes("/api/sessions") && !url.includes("/close");
+    });
+    expect(sessionPolls).toHaveLength(0);
+  });
+
+  it("shows reconnecting status after socket close and recovers on open", async () => {
+    const ws = await renderAppAndConnect();
+    await act(async () => ws.close());
+    await settle();
+    expect(container.textContent).toMatch(/重连|断开/);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    const next = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    await act(async () => next.open());
+    await act(async () => {
+      pushSessions(next, sessions, [
+        {
+          session: "gbt-a",
+          reset: true,
+          data_base64: utf8ToBase64("again"),
+        },
+        {
+          session: "gbt-unowned",
+          reset: true,
+          data_base64: utf8ToBase64("done"),
+        },
+      ]);
+    });
+    await settle();
+    expect(container.textContent).toContain("实时通道已连接");
+  });
+
+  it("surfaces disconnected and cleanup lifecycle on supervisor cards", async () => {
+    await renderAppAndConnect([
+      {
+        ...sessions[0],
+        client_state: "orphaned",
+        auto_close_at_ms: Date.now() + 60_000,
+      },
+    ]);
+    expect(container.textContent).toContain("清理倒计时");
+    expect(container.textContent).toContain("自动清理倒计时");
+  });
+
+  it("applies ordered terminal appends after the initial snapshot", async () => {
+    const ws = await renderAppAndConnect([sessions[0]], [
+      {
+        session: "gbt-a",
+        reset: true,
+        data_base64: utf8ToBase64("SNAP"),
+      },
+    ]);
+    const term = MockXTerm.instances[0];
+    expect(term.resetCount).toBeGreaterThanOrEqual(1);
+
+    await act(async () => {
+      pushSessions(ws, [sessions[0]], [
+        {
+          session: "gbt-a",
+          reset: false,
+          data_base64: utf8ToBase64("1"),
+        },
+        {
+          session: "gbt-a",
+          reset: false,
+          data_base64: utf8ToBase64("2"),
+        },
+      ]);
+    });
+    await settle();
+    const decoded = term.written.map((chunk) =>
+      typeof chunk === "string"
+        ? chunk
+        : new TextDecoder().decode(chunk),
+    );
+    expect(decoded.join("")).toContain("1");
+    expect(decoded.join("")).toContain("2");
   });
 });

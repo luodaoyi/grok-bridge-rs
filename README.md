@@ -14,6 +14,16 @@
 
 grok-build gives Codex a reliable local way to use Grok for real software work without creating a new unmanaged process for every request. Its shared runtime keeps sessions visible, interactive, grouped by Codex conversation, and easy to close from a browser.
 
+## WebUI Preview
+
+### Light theme
+
+![grok-build WebUI light theme](images/light.jpg)
+
+### Dark theme
+
+![grok-build WebUI dark theme](images/dark.jpg)
+
 ## Why Use It?
 
 When Codex hands work to Grok, you should not have to guess which process belongs to which task or whether it is still doing useful work. grok-build keeps that workflow in one place:

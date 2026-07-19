@@ -70,6 +70,47 @@ export function clientStateLabel(state) {
   );
 }
 
+/** Visual lifecycle for Codex lease / cleanup pipeline. */
+export function clientLifecycle(state) {
+  return (
+    {
+      unmanaged: "unmanaged",
+      connected: "connected",
+      disconnected: "disconnected",
+      orphaned: "cleanup",
+      closing: "cleanup",
+    }[state] ?? "unknown"
+  );
+}
+
+export function clientLifecycleLabel(state) {
+  return (
+    {
+      unmanaged: "未托管",
+      connected: "监督者在线",
+      disconnected: "监督者断开",
+      orphaned: "清理倒计时",
+      closing: "清理中",
+    }[state] ?? "状态未知"
+  );
+}
+
+export function dominantClientState(sessions) {
+  const priority = [
+    "closing",
+    "orphaned",
+    "disconnected",
+    "connected",
+    "unmanaged",
+  ];
+  for (const state of priority) {
+    if (sessions.some((session) => session.client_state === state)) {
+      return state;
+    }
+  }
+  return sessions[0]?.client_state ?? "unmanaged";
+}
+
 export function groupSummary(sessions) {
   const counts = { working: 0, waiting: 0, done: 0 };
   for (const session of sessions) {
@@ -100,6 +141,7 @@ export function remainingLabel(deadline, now = Date.now()) {
 }
 
 export function sessionsSignature(sessions) {
+  // Terminal bytes stream separately; signature tracks metadata only.
   return JSON.stringify(
     sessions.map((session) => [
       session.session,
@@ -119,7 +161,8 @@ export function sessionsSignature(sessions) {
       session.hook_at_ms,
       session.tool_name,
       session.waiting_reason,
-      session.screen,
+      session.rows,
+      session.cols,
     ]),
   );
 }

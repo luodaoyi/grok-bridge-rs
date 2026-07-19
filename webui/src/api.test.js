@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  eventsWebSocketUrl,
   getSessions,
   getVersionStatus,
+  normalizeEventsMessage,
   normalizeSessions,
+  normalizeTerminalEntries,
   normalizeVersionStatus,
 } from "./api.js";
 
@@ -123,5 +126,55 @@ describe("getVersionStatus", () => {
       latest: "0.6.2",
       update_available: true,
     });
+  });
+});
+
+describe("events stream helpers", () => {
+  it("builds same-origin ws/wss events URL", () => {
+    expect(
+      eventsWebSocketUrl({ protocol: "http:", host: "127.0.0.1:47653" }),
+    ).toBe("ws://127.0.0.1:47653/api/events");
+    expect(
+      eventsWebSocketUrl({ protocol: "https:", host: "localhost:8443" }),
+    ).toBe("wss://localhost:8443/api/events");
+  });
+
+  it("normalizes sessions event frames and terminal entries", () => {
+    const message = normalizeEventsMessage({
+      type: "sessions",
+      sessions: [{ session: "a" }, { session: "" }, null],
+      terminals: [
+        {
+          session: "a",
+          reset: true,
+          cursor: 0,
+          next_cursor: 3,
+          data_base64: "YWI=",
+        },
+        { session: "", data_base64: "x" },
+        null,
+      ],
+    });
+    expect(message).toEqual({
+      type: "sessions",
+      sessions: [{ session: "a" }],
+      terminals: [
+        {
+          session: "a",
+          reset: true,
+          cursor: 0,
+          next_cursor: 3,
+          data_base64: "YWI=",
+        },
+      ],
+    });
+  });
+
+  it("rejects invalid event frames", () => {
+    expect(() => normalizeEventsMessage(null)).toThrow(/not an object/i);
+    expect(() => normalizeEventsMessage({ type: "other" })).toThrow(
+      /unsupported events type/i,
+    );
+    expect(() => normalizeTerminalEntries({})).toThrow(/not an array/i);
   });
 });

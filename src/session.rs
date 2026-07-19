@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     ffi::OsString,
     io::{ErrorKind, Read, Write},
@@ -19,8 +19,8 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 
 use crate::protocol::{
     ClientLeaseState, CloseGroupResult, HookActivity, HookEvent, HookEventKind, MAX_WRITE_BYTES,
-    ReadResult, SessionPhase, SessionState, WaitCondition, WaitResult, validate_client_session_id,
-    validate_owner, validate_terminal_size,
+    ReadResult, SessionPhase, SessionState, TerminalStreamEntry, WaitCondition, WaitResult,
+    WebEventsMessage, validate_client_session_id, validate_owner, validate_terminal_size,
 };
 
 const INITIAL_COLS: u16 = 120;
@@ -66,10 +66,63 @@ impl OrphanPolicy {
     }
 }
 
+/// Global host revision used by the read-only WebUI `/api/events` stream.
+/// Every session metadata or terminal change bumps the revision and wakes waiters.
+pub(crate) struct HostRevision {
+    state: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl HostRevision {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(0),
+            changed: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn current(&self) -> u64 {
+        self.state.lock().map(|guard| *guard).unwrap_or(0)
+    }
+
+    pub(crate) fn bump(&self) {
+        let Ok(mut revision) = self.state.lock() else {
+            return;
+        };
+        *revision = revision.wrapping_add(1);
+        self.changed.notify_all();
+    }
+
+    pub(crate) fn wait_for_change(&self, seen: u64, timeout: Duration) -> u64 {
+        let Ok(revision) = self.state.lock() else {
+            return seen;
+        };
+        if *revision != seen {
+            return *revision;
+        }
+        let Ok(result) = self.changed.wait_timeout(revision, timeout) else {
+            return seen;
+        };
+        *result.0
+    }
+}
+
+/// One encoded WebUI events frame plus cursor commits that become durable only
+/// after the frame is successfully sent.
+#[derive(Debug)]
+pub(crate) struct WebEventsFramePlan {
+    pub(crate) message: WebEventsMessage,
+    /// Exclusive byte cursors to store after this frame is sent.
+    pub(crate) cursor_commits: HashMap<String, u64>,
+    /// Cursor map keys to drop after this frame is sent (closed sessions).
+    pub(crate) cursor_drops: Vec<String>,
+}
+
 pub(crate) struct SessionHost {
     registry: Mutex<SessionRegistry>,
     next_id: AtomicU64,
     orphan_policy: OrphanPolicy,
+    revision: Arc<HostRevision>,
 }
 
 struct SessionRegistry {
@@ -115,7 +168,42 @@ impl SessionHost {
             }),
             next_id: AtomicU64::new(1),
             orphan_policy,
+            revision: Arc::new(HostRevision::new()),
         }
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision.current()
+    }
+
+    pub(crate) fn notify_revision(&self) {
+        self.revision.bump();
+    }
+
+    pub(crate) fn wait_revision(&self, seen: u64, timeout: Duration) -> u64 {
+        self.revision.wait_for_change(seen, timeout)
+    }
+
+    /// Earliest *future* wall-clock deadline at which any session's client lease
+    /// state would change without another host revision (Connected →
+    /// Disconnected/Orphaned). Returns only future deadlines so waiters do not
+    /// spin after the transition is already reflected in live list/show state.
+    pub(crate) fn next_client_lifecycle_deadline_ms(&self) -> Result<Option<u64>> {
+        let now = now_millis();
+        let registry = self
+            .registry
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
+        let mut next: Option<u64> = None;
+        for session in registry.sessions.values() {
+            if let Some(deadline) = session.next_lifecycle_deadline_ms(now)? {
+                next = Some(match next {
+                    Some(current) => current.min(deadline),
+                    None => deadline,
+                });
+            }
+        }
+        Ok(next)
     }
 
     pub(crate) fn touch_client(&self, client_session_id: &str) -> Result<()> {
@@ -129,6 +217,8 @@ impl SessionHost {
             .entry(client_session_id.to_owned())
             .or_insert_with(|| Arc::new(AtomicU64::new(0)))
             .store(now_millis(), Ordering::Release);
+        drop(registry);
+        self.notify_revision();
         Ok(())
     }
 
@@ -187,12 +277,15 @@ impl SessionHost {
                 client_lease,
                 orphan_policy: self.orphan_policy,
             },
+            Arc::clone(&self.revision),
         )?;
         let state = session.state()?;
         registry.sessions.insert(handle.clone(), session);
         registry
             .provider_sessions
             .insert(provider_session_id, handle);
+        drop(registry);
+        self.notify_revision();
         Ok(state)
     }
 
@@ -212,6 +305,115 @@ impl SessionHost {
 
     pub(crate) fn list_web(&self) -> Result<Vec<SessionState>> {
         self.list()
+    }
+
+    /// Plan ordered WebUI events frames without mutating the connection cursor map.
+    ///
+    /// - `force_reset`: one `reset=true` ANSI snapshot per session (upgrade / resync).
+    /// - Otherwise drain raw PTY bytes only up to each session's **frozen**
+    ///   `last_cursor` from this batch so a live producer cannot make the plan chase
+    ///   forever.
+    /// - Terminal entries may span multiple frames under `max_message_bytes`.
+    /// - Cursor commits/drops are returned per frame and must be applied only after
+    ///   that frame is successfully sent.
+    /// - Session metadata in the JSON omits heavy `screen` / `screen_ansi_base64`;
+    ///   reset terminal entries remain the authoritative ANSI snapshot.
+    pub(crate) fn plan_web_events(
+        &self,
+        cursors: &HashMap<String, u64>,
+        force_reset: bool,
+        max_message_bytes: usize,
+    ) -> Result<Vec<WebEventsFramePlan>> {
+        let sessions = self.list_web()?;
+        let active: HashSet<&str> = sessions
+            .iter()
+            .map(|state| state.session.as_str())
+            .collect();
+        let cursor_drops: Vec<String> = cursors
+            .keys()
+            .filter(|session| !active.contains(session.as_str()))
+            .cloned()
+            .collect();
+
+        let mut terminal_entries: Vec<(TerminalStreamEntry, Option<(String, u64)>)> = Vec::new();
+        for state in &sessions {
+            if force_reset || !cursors.contains_key(&state.session) {
+                terminal_entries.push((
+                    TerminalStreamEntry::reset_snapshot(state),
+                    Some((state.session.clone(), state.last_cursor)),
+                ));
+                continue;
+            }
+
+            let mut cursor = cursors
+                .get(&state.session)
+                .copied()
+                .unwrap_or(state.last_cursor);
+            // Freeze the exclusive end for this batch so continuous output cannot
+            // unbounded-chase the live cursor inside one plan call.
+            let freeze_end = state.last_cursor;
+            if cursor > freeze_end {
+                terminal_entries.push((
+                    TerminalStreamEntry::reset_snapshot(state),
+                    Some((state.session.clone(), freeze_end)),
+                ));
+                continue;
+            }
+            if cursor == freeze_end {
+                continue;
+            }
+
+            while cursor < freeze_end {
+                let limit = usize::try_from(freeze_end - cursor)
+                    .unwrap_or(MAX_READ_BYTES)
+                    .clamp(1, MAX_READ_BYTES);
+                let read = match self.read(&state.session, cursor, limit, 0) {
+                    Ok(read) => read,
+                    Err(_) => {
+                        terminal_entries.push((
+                            TerminalStreamEntry::reset_snapshot(state),
+                            Some((state.session.clone(), freeze_end)),
+                        ));
+                        break;
+                    }
+                };
+                if read.truncated {
+                    terminal_entries.push((
+                        TerminalStreamEntry::reset_snapshot(state),
+                        Some((state.session.clone(), freeze_end)),
+                    ));
+                    break;
+                }
+                if read.next_cursor == read.cursor {
+                    break;
+                }
+                // Never emit past the freeze point even if the live stream advanced.
+                let capped_next = read.next_cursor.min(freeze_end);
+                if capped_next <= cursor {
+                    break;
+                }
+                let mut entry = TerminalStreamEntry::delta(&read);
+                if capped_next != read.next_cursor {
+                    // Re-encode a prefix when the live read overshot the freeze.
+                    let raw = BASE64.decode(&read.data_base64).unwrap_or_default();
+                    let take = (capped_next - read.cursor) as usize;
+                    let take = take.min(raw.len());
+                    entry.data_base64 = BASE64.encode(&raw[..take]);
+                    entry.next_cursor = read.cursor + take as u64;
+                }
+                cursor = entry.next_cursor;
+                terminal_entries.push((entry, Some((state.session.clone(), cursor))));
+            }
+        }
+
+        let sessions_view: Vec<SessionState> =
+            sessions.into_iter().map(web_events_session_view).collect();
+        pack_web_events_frames(
+            sessions_view,
+            terminal_entries,
+            cursor_drops,
+            max_message_bytes,
+        )
     }
 
     pub(crate) fn show(&self, handle: &str) -> Result<SessionState> {
@@ -294,6 +496,8 @@ impl SessionHost {
             .lock()
             .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
         registry.remove_session(handle, &session);
+        drop(registry);
+        self.notify_revision();
         Ok(true)
     }
 
@@ -329,6 +533,9 @@ impl SessionHost {
                 Err(error) => failures.push(format!("{handle}: {error:#}")),
             }
         }
+        if closed > 0 {
+            self.notify_revision();
+        }
         Ok(CloseGroupResult {
             matched,
             closed,
@@ -359,6 +566,11 @@ impl SessionHost {
                 .map_err(|_| anyhow::anyhow!("session registry lock was poisoned"))?;
             registry.clients.remove(client_session_id);
         }
+        // close_sessions already notifies on successful closes; also wake when the
+        // client lease map changes even if no sessions matched.
+        if result.matched == 0 {
+            self.notify_revision();
+        }
         Ok(result)
     }
 
@@ -377,6 +589,10 @@ impl SessionHost {
             }
             sessions
         };
+        if !sessions.is_empty() {
+            // Surface ClientLeaseState::Closing as soon as cleanup is claimed.
+            self.notify_revision();
+        }
         self.close_sessions(sessions)
     }
 
@@ -399,6 +615,10 @@ impl SessionHost {
                     failures.push(format!("{handle}: {error:#}"));
                 }
             }
+        }
+        if closed > 0 || matched > 0 {
+            // Removal and Closing (cleanup_claimed) transitions must wake WebUI.
+            self.notify_revision();
         }
         Ok(CloseGroupResult {
             matched,
@@ -434,6 +654,7 @@ impl SessionHost {
                 Err(error) => errors.push(format!("{handle}: {error:#}")),
             }
         }
+        self.notify_revision();
         if errors.is_empty() {
             Ok(())
         } else {
@@ -483,6 +704,7 @@ struct LaunchConfig {
 struct Session {
     inner: Mutex<SessionInner>,
     changed: Condvar,
+    host_revision: Arc<HostRevision>,
     writer_tx: Mutex<Option<SyncSender<Vec<u8>>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
@@ -615,7 +837,12 @@ impl Session {
             .clone())
     }
 
-    fn spawn(handle: String, provider_session_id: &str, config: LaunchConfig) -> Result<Arc<Self>> {
+    fn spawn(
+        handle: String,
+        provider_session_id: &str,
+        config: LaunchConfig,
+        host_revision: Arc<HostRevision>,
+    ) -> Result<Arc<Self>> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -678,6 +905,7 @@ impl Session {
                 hook: HookState::default(),
             }),
             changed: Condvar::new(),
+            host_revision,
             writer_tx: Mutex::new(Some(writer_tx)),
             master: Mutex::new(Some(pair.master)),
             killer: Mutex::new(Some(killer)),
@@ -692,12 +920,28 @@ impl Session {
         Ok(session)
     }
 
+    fn signal_changed(&self) {
+        self.changed.notify_all();
+        self.host_revision.bump();
+    }
+
     fn state(&self) -> Result<SessionState> {
         let inner = self
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
         Ok(inner.to_state(now_millis(), self.cleanup_claimed.load(Ordering::Acquire)))
+    }
+
+    /// Next pure time-based client lease transition for this session, if any.
+    /// Returns only a future deadline so waiters do not spin after the transition
+    /// has already been observed via a subsequent list/show.
+    fn next_lifecycle_deadline_ms(&self, now: u64) -> Result<Option<u64>> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?;
+        Ok(inner.next_lifecycle_deadline_ms(now, self.cleanup_claimed.load(Ordering::Acquire)))
     }
 
     fn claim_orphan_cleanup(&self, now: u64) -> Result<bool> {
@@ -785,7 +1029,7 @@ impl Session {
         inner.hook.last_event_at_ms = Some(now);
         inner.updated_at_ms = now;
         drop(inner);
-        self.changed.notify_all();
+        self.signal_changed();
         Ok(())
     }
 
@@ -908,7 +1152,7 @@ impl Session {
                 inner.updated_at_ms = now;
                 drop(writer_guard);
                 drop(inner);
-                self.changed.notify_all();
+                self.signal_changed();
                 Ok(())
             }
             Err(TrySendError::Full(_)) => bail!("session input queue is full"),
@@ -947,7 +1191,7 @@ impl Session {
         inner.updated_at_ms = now_millis();
         drop(master_guard);
         drop(inner);
-        self.changed.notify_all();
+        self.signal_changed();
         Ok(())
     }
 
@@ -1057,7 +1301,7 @@ impl Session {
         for response in responses {
             self.queue_terminal_response(response);
         }
-        self.changed.notify_all();
+        self.signal_changed();
     }
 
     fn queue_terminal_response(&self, response: Vec<u8>) {
@@ -1095,7 +1339,7 @@ impl Session {
             inner.reader_done = true;
             record_error(&mut inner, message);
         }
-        self.changed.notify_all();
+        self.signal_changed();
         if let Err(error) = self.request_termination() {
             self.record_secondary_error(format!(
                 "failed to terminate Grok after reader error: {error}"
@@ -1107,7 +1351,7 @@ impl Session {
         if let Ok(mut inner) = self.inner.lock() {
             record_error(&mut inner, message);
         }
-        self.changed.notify_all();
+        self.signal_changed();
         if let Err(error) = self.request_termination() {
             self.record_secondary_error(format!(
                 "failed to terminate Grok after writer error: {error}"
@@ -1119,7 +1363,7 @@ impl Session {
         if let Ok(mut inner) = self.inner.lock() {
             record_error(&mut inner, message);
         }
-        self.changed.notify_all();
+        self.signal_changed();
         if let Err(error) = self.request_termination() {
             self.record_secondary_error(format!(
                 "failed to terminate Grok after wait error: {error}"
@@ -1190,7 +1434,7 @@ impl Session {
         if let Ok(mut inner) = self.inner.lock() {
             record_error(&mut inner, message);
         }
-        self.changed.notify_all();
+        self.signal_changed();
     }
 
     fn close_writer(&self) {
@@ -1210,7 +1454,7 @@ impl Session {
             self.close_writer();
             self.release_master();
         }
-        self.changed.notify_all();
+        self.signal_changed();
     }
 }
 
@@ -1252,6 +1496,23 @@ impl SessionInner {
         }
     }
 
+    fn next_lifecycle_deadline_ms(&self, now: u64, cleanup_claimed: bool) -> Option<u64> {
+        if cleanup_claimed {
+            return None;
+        }
+        let lease = self.client_lease.as_ref()?;
+        let last_seen = lease.load(Ordering::Acquire);
+        let lease_expires_at = last_seen.saturating_add(self.orphan_policy.lease_ms);
+        // Connected while now < lease_expires_at; at equality the state has already
+        // flipped. Schedule wake at lease_expires_at so the due send observes the
+        // new Disconnected/Orphaned state (not a second Connected snapshot).
+        if now < lease_expires_at {
+            Some(lease_expires_at)
+        } else {
+            None
+        }
+    }
+
     fn client_lifecycle(
         &self,
         now: u64,
@@ -1265,7 +1526,8 @@ impl SessionInner {
         if cleanup_claimed {
             return (ClientLeaseState::Closing, Some(last_seen), None, None);
         }
-        if now <= lease_expires_at {
+        // Inclusive expiry: Connected only strictly before lease_expires_at.
+        if now < lease_expires_at {
             return (ClientLeaseState::Connected, Some(last_seen), None, None);
         }
         if !phase_is_safe_for_orphan_cleanup(self.phase) {
@@ -1310,6 +1572,227 @@ fn set_phase(inner: &mut SessionInner, phase: SessionPhase, now: u64) {
         inner.phase = phase;
         inner.phase_changed_at_ms = now;
     }
+}
+
+/// Strip heavy terminal snapshots from session metadata for `/api/events`.
+/// Reset terminal entries carry the authoritative ANSI snapshot.
+fn web_events_session_view(mut state: SessionState) -> SessionState {
+    state.screen = None;
+    state.screen_ansi_base64 = String::new();
+    state
+}
+
+fn message_json_len(message: &WebEventsMessage) -> usize {
+    serde_json::to_vec(message)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+/// One planned terminal payload plus an optional durable cursor commit for its
+/// final piece (`session` → exclusive PTY cursor).
+type PlannedTerminal = (TerminalStreamEntry, Option<(String, u64)>);
+
+fn pack_web_events_frames(
+    sessions_view: Vec<SessionState>,
+    terminal_entries: Vec<PlannedTerminal>,
+    cursor_drops: Vec<String>,
+    max_message_bytes: usize,
+) -> Result<Vec<WebEventsFramePlan>> {
+    let max_message_bytes = max_message_bytes.max(1);
+    let sessions_only = WebEventsMessage::sessions(sessions_view.clone(), Vec::new());
+    let sessions_only_len = message_json_len(&sessions_only);
+    if sessions_only_len > max_message_bytes {
+        bail!(
+            "web events sessions metadata exceeds max_message_bytes ({sessions_only_len} > {max_message_bytes})"
+        );
+    }
+
+    // Expand every terminal entry into pieces that each serialize under the bound
+    // when paired alone with sessions metadata.
+    let mut expanded: Vec<PlannedTerminal> = Vec::new();
+    for (entry, commit) in terminal_entries {
+        expanded.extend(split_terminal_entry_to_fit(
+            entry,
+            commit,
+            &sessions_view,
+            max_message_bytes,
+        )?);
+    }
+
+    let mut frames: Vec<WebEventsFramePlan> = Vec::new();
+    let mut terminals: Vec<TerminalStreamEntry> = Vec::new();
+    let mut commits: HashMap<String, u64> = HashMap::new();
+    let mut drops_for_first = cursor_drops;
+
+    let flush = |terminals: &mut Vec<TerminalStreamEntry>,
+                 commits: &mut HashMap<String, u64>,
+                 drops: &mut Vec<String>,
+                 sessions_view: &Vec<SessionState>,
+                 frames: &mut Vec<WebEventsFramePlan>| {
+        if terminals.is_empty() && commits.is_empty() && drops.is_empty() && !frames.is_empty() {
+            return;
+        }
+        let message = WebEventsMessage::sessions(sessions_view.clone(), std::mem::take(terminals));
+        debug_assert!(message_json_len(&message) <= max_message_bytes);
+        frames.push(WebEventsFramePlan {
+            message,
+            cursor_commits: std::mem::take(commits),
+            cursor_drops: std::mem::take(drops),
+        });
+    };
+
+    if expanded.is_empty() {
+        frames.push(WebEventsFramePlan {
+            message: sessions_only,
+            cursor_commits: HashMap::new(),
+            cursor_drops: drops_for_first,
+        });
+        return Ok(frames);
+    }
+
+    for (entry, commit) in expanded {
+        let mut probe_terminals = terminals.clone();
+        probe_terminals.push(entry.clone());
+        let probe = WebEventsMessage::sessions(sessions_view.clone(), probe_terminals);
+        if !terminals.is_empty() && message_json_len(&probe) > max_message_bytes {
+            flush(
+                &mut terminals,
+                &mut commits,
+                &mut drops_for_first,
+                &sessions_view,
+                &mut frames,
+            );
+        }
+        // After split_terminal_entry_to_fit, a single entry must fit alone.
+        let alone = WebEventsMessage::sessions(sessions_view.clone(), vec![entry.clone()]);
+        if message_json_len(&alone) > max_message_bytes {
+            bail!("web events terminal chunk still exceeds max_message_bytes after split");
+        }
+        terminals.push(entry);
+        if let Some((session, cursor)) = commit {
+            commits.insert(session, cursor);
+        }
+    }
+
+    if !terminals.is_empty()
+        || !commits.is_empty()
+        || !drops_for_first.is_empty()
+        || frames.is_empty()
+    {
+        flush(
+            &mut terminals,
+            &mut commits,
+            &mut drops_for_first,
+            &sessions_view,
+            &mut frames,
+        );
+    }
+
+    if frames.is_empty() {
+        frames.push(WebEventsFramePlan {
+            message: WebEventsMessage::sessions(sessions_view, Vec::new()),
+            cursor_commits: HashMap::new(),
+            cursor_drops: Vec::new(),
+        });
+    }
+    for frame in &frames {
+        let len = message_json_len(&frame.message);
+        if len > max_message_bytes {
+            bail!("web events frame exceeds max_message_bytes ({len} > {max_message_bytes})");
+        }
+    }
+    Ok(frames)
+}
+
+fn terminal_entry_message_len(
+    sessions_view: &[SessionState],
+    entry: &TerminalStreamEntry,
+) -> usize {
+    message_json_len(&WebEventsMessage::sessions(
+        sessions_view.to_vec(),
+        vec![entry.clone()],
+    ))
+}
+
+/// Split one terminal entry into ordered pieces that each serialize to
+/// `<= max_message_bytes` with the sessions metadata. Reset snapshots: first
+/// piece `reset=true`, continuations `reset=false`; PTY cursor commit only on
+/// the final piece. Raw deltas preserve byte cursor progression.
+fn split_terminal_entry_to_fit(
+    entry: TerminalStreamEntry,
+    commit: Option<(String, u64)>,
+    sessions_view: &[SessionState],
+    max_message_bytes: usize,
+) -> Result<Vec<PlannedTerminal>> {
+    if terminal_entry_message_len(sessions_view, &entry) <= max_message_bytes {
+        return Ok(vec![(entry, commit)]);
+    }
+
+    let raw = BASE64
+        .decode(&entry.data_base64)
+        .context("terminal data_base64 is invalid")?;
+    if raw.is_empty() {
+        bail!("web events terminal entry exceeds max_message_bytes with empty payload");
+    }
+
+    let mut pieces: Vec<PlannedTerminal> = Vec::new();
+    let mut offset = 0_usize;
+    let mut stream_cursor = entry.cursor;
+    let original_reset = entry.reset;
+    let pty_commit_cursor = entry.next_cursor;
+
+    while offset < raw.len() {
+        let remaining = raw.len() - offset;
+        // Binary-search the largest raw prefix that still fits in one frame.
+        let mut lo = 1_usize;
+        let mut hi = remaining;
+        let mut best = 0_usize;
+        while lo <= hi {
+            let mid = (lo + hi) / 2;
+            let candidate = TerminalStreamEntry {
+                session: entry.session.clone(),
+                reset: original_reset && offset == 0,
+                cursor: stream_cursor,
+                next_cursor: stream_cursor.saturating_add(mid as u64),
+                data_base64: BASE64.encode(&raw[offset..offset + mid]),
+            };
+            if terminal_entry_message_len(sessions_view, &candidate) <= max_message_bytes {
+                best = mid;
+                lo = mid + 1;
+            } else if mid == 0 {
+                break;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if best == 0 {
+            bail!(
+                "web events cannot fit any terminal payload bytes within max_message_bytes ({max_message_bytes})"
+            );
+        }
+
+        let is_last = offset + best >= raw.len();
+        let next_cursor = if is_last {
+            // Final piece reports the original exclusive end (PTY or snapshot end).
+            pty_commit_cursor
+        } else {
+            stream_cursor.saturating_add(best as u64)
+        };
+        let piece = TerminalStreamEntry {
+            session: entry.session.clone(),
+            reset: original_reset && offset == 0,
+            cursor: stream_cursor,
+            next_cursor,
+            data_base64: BASE64.encode(&raw[offset..offset + best]),
+        };
+        // Durable PTY cursor advances only after the final chunk is sent.
+        let piece_commit = if is_last { commit.clone() } else { None };
+        pieces.push((piece, piece_commit));
+        stream_cursor = next_cursor;
+        offset += best;
+    }
+
+    Ok(pieces)
 }
 
 fn phase_is_safe_for_orphan_cleanup(phase: SessionPhase) -> bool {
@@ -1788,6 +2271,13 @@ mod tests {
     }
 
     fn test_session(phase: SessionPhase) -> Session {
+        test_session_with_revision(phase, Arc::new(HostRevision::new()))
+    }
+
+    fn test_session_with_revision(
+        phase: SessionPhase,
+        host_revision: Arc<HostRevision>,
+    ) -> Session {
         let cwd = canonical_directory(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
         let (writer_tx, _writer_rx) = sync_channel(1);
         let terminal = phase_is_terminal(phase);
@@ -1827,6 +2317,7 @@ mod tests {
                 hook: HookState::default(),
             }),
             changed: Condvar::new(),
+            host_revision,
             writer_tx: Mutex::new(Some(writer_tx)),
             master: Mutex::new(None),
             killer: Mutex::new(None),
@@ -1837,7 +2328,8 @@ mod tests {
     }
 
     fn test_host(provider_session_id: &str, phase: SessionPhase) -> SessionHost {
-        let session = Arc::new(test_session(phase));
+        let revision = Arc::new(HostRevision::new());
+        let session = Arc::new(test_session_with_revision(phase, Arc::clone(&revision)));
         let handle = session.state().unwrap().session;
         SessionHost {
             registry: Mutex::new(SessionRegistry {
@@ -1851,6 +2343,7 @@ mod tests {
                 lease_ms: 120_000,
                 grace_ms: 600_000,
             },
+            revision,
         }
     }
 
@@ -2361,5 +2854,347 @@ mod tests {
         assert!(!raw_input_starts_turn(b"\x1b[A"));
         assert!(raw_input_starts_turn(b"hello\r"));
         assert!(raw_input_starts_turn(&[0x03]));
+    }
+
+    #[test]
+    fn host_revision_bumps_on_touch_client_and_waiters_observe_it() {
+        let host = SessionHost::new(OrphanPolicy {
+            lease_ms: 120_000,
+            grace_ms: 600_000,
+        });
+        let seen = host.revision();
+        host.touch_client("codex-thread-42").unwrap();
+        assert_ne!(host.revision(), seen);
+        let advanced = host.wait_revision(seen, Duration::from_millis(50));
+        assert_ne!(advanced, seen);
+    }
+
+    #[test]
+    fn host_revision_bumps_when_session_output_arrives() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let before = host.revision();
+        let session = host.get("gbt-test").unwrap();
+        session.append_output(b"hello".to_vec());
+        assert_ne!(host.revision(), before);
+    }
+
+    fn apply_frame_commits(cursors: &mut HashMap<String, u64>, frames: &[WebEventsFramePlan]) {
+        for frame in frames {
+            for (session, cursor) in &frame.cursor_commits {
+                cursors.insert(session.clone(), *cursor);
+            }
+            for session in &frame.cursor_drops {
+                cursors.remove(session);
+            }
+        }
+    }
+
+    #[test]
+    fn web_events_initial_reset_uses_ansi_snapshot_and_last_cursor() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let session = host.get("gbt-test").unwrap();
+        session.append_output(b"abc".to_vec());
+        let full_ansi = session.state().unwrap().screen_ansi_base64;
+        let cursors = HashMap::new();
+        let frames = host.plan_web_events(&cursors, true, 1024 * 1024).unwrap();
+        assert_eq!(frames.len(), 1);
+        let message = &frames[0].message;
+        assert_eq!(message.message_type, "sessions");
+        assert_eq!(message.sessions.len(), 1);
+        assert!(message.sessions[0].screen.is_none());
+        assert!(message.sessions[0].screen_ansi_base64.is_empty());
+        assert_eq!(message.terminals.len(), 1);
+        let entry = &message.terminals[0];
+        assert!(entry.reset);
+        assert_eq!(entry.cursor, 0);
+        assert_eq!(entry.next_cursor, 3);
+        assert_eq!(entry.data_base64, full_ansi);
+        assert_eq!(frames[0].cursor_commits.get("gbt-test").copied(), Some(3));
+    }
+
+    #[test]
+    fn web_events_drains_past_64kib_across_bounded_frames() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let session = host.get("gbt-test").unwrap();
+        let payload = vec![b'x'; MAX_READ_BYTES + 1_024];
+        session.append_output(payload.clone());
+
+        let cursors = HashMap::from([("gbt-test".to_owned(), 0_u64)]);
+        // Force multi-frame packing; every produced frame must stay in bound.
+        let max_frame = 50_000;
+        let frames = host.plan_web_events(&cursors, false, max_frame).unwrap();
+        assert!(
+            frames.len() >= 2,
+            "expected multi-frame drain, got {}",
+            frames.len()
+        );
+        for frame in &frames {
+            let encoded = serde_json::to_vec(&frame.message).unwrap();
+            assert!(
+                encoded.len() <= max_frame,
+                "frame len {} exceeds bound {}",
+                encoded.len(),
+                max_frame
+            );
+        }
+
+        let mut decoded = Vec::new();
+        for frame in &frames {
+            for entry in &frame.message.terminals {
+                assert!(!entry.reset);
+                decoded.extend(
+                    BASE64
+                        .decode(&entry.data_base64)
+                        .expect("terminal delta must be valid base64"),
+                );
+            }
+        }
+        assert_eq!(decoded, payload);
+
+        let mut committed = cursors.clone();
+        assert_eq!(committed.get("gbt-test").copied(), Some(0));
+        apply_frame_commits(&mut committed, &frames);
+        assert_eq!(
+            committed.get("gbt-test").copied(),
+            Some(payload.len() as u64)
+        );
+    }
+
+    #[test]
+    fn web_events_freeze_end_stops_live_cursor_chase() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let session = host.get("gbt-test").unwrap();
+        session.append_output(vec![b'a'; 4_096]);
+        let cursors = HashMap::from([("gbt-test".to_owned(), 0_u64)]);
+
+        let producer = Arc::clone(&session);
+        let running = Arc::new(AtomicBool::new(true));
+        let running_flag = Arc::clone(&running);
+        let hammer = thread::spawn(move || {
+            while running_flag.load(Ordering::Acquire) {
+                producer.append_output(vec![b'z'; 8_192]);
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        // Let the producer run so list/read can observe a moving live cursor.
+        thread::sleep(Duration::from_millis(30));
+        let frames = host.plan_web_events(&cursors, false, 1024 * 1024).unwrap();
+        running.store(false, Ordering::Release);
+        hammer.join().unwrap();
+
+        let mut decoded = 0_u64;
+        let mut end = 0_u64;
+        for frame in &frames {
+            for entry in &frame.message.terminals {
+                let raw = BASE64.decode(&entry.data_base64).unwrap();
+                decoded += raw.len() as u64;
+                end = end.max(entry.next_cursor);
+            }
+        }
+        // Batch is finite: committed end equals total decoded and matches freeze commits.
+        assert!(decoded > 0);
+        assert_eq!(decoded, end);
+        let committed = frames
+            .iter()
+            .filter_map(|frame| frame.cursor_commits.get("gbt-test").copied())
+            .max()
+            .unwrap();
+        assert_eq!(committed, end);
+        // Live stream may have advanced further after the frozen batch.
+        assert!(session.state().unwrap().last_cursor >= end);
+    }
+
+    #[test]
+    fn web_events_splits_large_reset_snapshot_with_final_commit_only() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let session = host.get("gbt-test").unwrap();
+        // Large screen content so a reset ANSI snapshot exceeds a small bound.
+        session.append_output(vec![b'R'; 12_000]);
+        let full = session.state().unwrap();
+        let full_ansi = BASE64
+            .decode(&full.screen_ansi_base64)
+            .expect("screen ansi");
+        assert!(full_ansi.len() > 1_000);
+
+        let cursors = HashMap::new();
+        let max_frame = 2_500;
+        let frames = host.plan_web_events(&cursors, true, max_frame).unwrap();
+        assert!(
+            frames.len() >= 2,
+            "expected split reset, got {}",
+            frames.len()
+        );
+
+        let mut reconstructed = Vec::new();
+        let mut saw_reset = false;
+        let mut commit_frames = 0_usize;
+        for (index, frame) in frames.iter().enumerate() {
+            let encoded = serde_json::to_vec(&frame.message).unwrap();
+            assert!(
+                encoded.len() <= max_frame,
+                "frame {index} len {} exceeds bound {max_frame}",
+                encoded.len()
+            );
+            if !frame.cursor_commits.is_empty() {
+                commit_frames += 1;
+            }
+            for entry in &frame.message.terminals {
+                if entry.reset {
+                    assert!(!saw_reset, "reset must appear only on the first chunk");
+                    assert_eq!(index, 0);
+                    saw_reset = true;
+                } else {
+                    assert!(saw_reset, "continuation before reset");
+                }
+                reconstructed.extend(BASE64.decode(&entry.data_base64).unwrap());
+            }
+        }
+        assert!(saw_reset);
+        assert_eq!(reconstructed, full_ansi);
+        assert_eq!(
+            commit_frames, 1,
+            "PTY cursor commits only on the final chunk"
+        );
+        assert_eq!(
+            frames
+                .last()
+                .and_then(|frame| frame.cursor_commits.get("gbt-test").copied()),
+            Some(full.last_cursor)
+        );
+        // Mid-send failure simulation: durable map stays uncommitted until apply.
+        assert!(cursors.is_empty());
+        let mut durable = cursors.clone();
+        apply_frame_commits(&mut durable, &frames[..frames.len() - 1]);
+        assert!(
+            !durable.contains_key("gbt-test"),
+            "partial send must not commit the PTY cursor"
+        );
+        apply_frame_commits(&mut durable, &frames[frames.len() - 1..]);
+        assert_eq!(durable.get("gbt-test").copied(), Some(full.last_cursor));
+    }
+
+    #[test]
+    fn web_events_sessions_only_oversize_is_a_planning_error() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let cursors = HashMap::new();
+        // Bound smaller than any sessions metadata JSON.
+        let err = host
+            .plan_web_events(&cursors, false, 8)
+            .expect_err("sessions-only oversize must fail planning");
+        assert!(
+            err.to_string().contains("sessions metadata exceeds"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn web_events_resets_when_client_cursor_is_truncated() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let session = host.get("gbt-test").unwrap();
+        // Exceed the bounded transcript so cursor 0 becomes truncated.
+        let big = vec![b'y'; MAX_TRANSCRIPT_BYTES + 4_096];
+        session.append_output(big);
+        let last_cursor = session.state().unwrap().last_cursor;
+
+        let cursors = HashMap::from([("gbt-test".to_owned(), 0_u64)]);
+        let frames = host.plan_web_events(&cursors, false, 1024 * 1024).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].message.terminals.len(), 1);
+        assert!(frames[0].message.terminals[0].reset);
+        assert_eq!(frames[0].message.terminals[0].next_cursor, last_cursor);
+        assert_eq!(
+            frames[0].cursor_commits.get("gbt-test").copied(),
+            Some(last_cursor)
+        );
+        assert_eq!(cursors.get("gbt-test").copied(), Some(0));
+    }
+
+    #[test]
+    fn web_events_resets_for_new_sessions_and_drops_closed_cursors() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Running);
+        let cursors = HashMap::from([("stale-session".to_owned(), 9_u64)]);
+        let frames = host.plan_web_events(&cursors, false, 1024 * 1024).unwrap();
+        assert_eq!(frames[0].message.terminals.len(), 1);
+        assert!(frames[0].message.terminals[0].reset);
+        assert!(
+            frames[0]
+                .cursor_drops
+                .iter()
+                .any(|session| session == "stale-session")
+        );
+        assert!(frames[0].cursor_commits.contains_key("gbt-test"));
+        assert_eq!(cursors.get("stale-session").copied(), Some(9));
+    }
+
+    #[test]
+    fn lease_deadline_and_client_state_transition_at_expiry() {
+        let host = test_host(TEST_PROVIDER_SESSION_ID, SessionPhase::Idle);
+        let lease = Arc::new(AtomicU64::new(1_000));
+        {
+            let session = host.get("gbt-test").unwrap();
+            let mut inner = session.inner.lock().unwrap();
+            inner.client_session_id = Some("codex-thread".to_owned());
+            inner.client_lease = Some(Arc::clone(&lease));
+            inner.orphan_policy = OrphanPolicy {
+                lease_ms: 100,
+                grace_ms: 200,
+            };
+            inner.phase_changed_at_ms = 900;
+        }
+        // last_seen=1000, lease_ms=100 => lease_expires_at=1100.
+        // Connected while now < 1100; at 1100 state is already Orphaned (idle).
+        // Never call next_lifecycle_deadline_ms while holding inner (non-reentrant Mutex).
+        let session = host.get("gbt-test").unwrap();
+
+        assert_eq!(
+            session
+                .inner
+                .lock()
+                .unwrap()
+                .client_lifecycle(1_099, false)
+                .0,
+            ClientLeaseState::Connected
+        );
+        assert_eq!(
+            session.next_lifecycle_deadline_ms(1_099).unwrap(),
+            Some(1_100)
+        );
+
+        assert_eq!(
+            session
+                .inner
+                .lock()
+                .unwrap()
+                .client_lifecycle(1_100, false)
+                .0,
+            ClientLeaseState::Orphaned
+        );
+        assert_eq!(session.next_lifecycle_deadline_ms(1_100).unwrap(), None);
+
+        assert_eq!(
+            session
+                .inner
+                .lock()
+                .unwrap()
+                .client_lifecycle(1_101, false)
+                .0,
+            ClientLeaseState::Orphaned
+        );
+        assert_eq!(session.next_lifecycle_deadline_ms(1_101).unwrap(), None);
+
+        // Exactly one due wake at expiry observes the changed state: deadline was
+        // scheduled while Connected, and the first moment now >= deadline lists
+        // Orphaned with no further pure-time deadline.
+        let scheduled = session.next_lifecycle_deadline_ms(1_050).unwrap();
+        assert_eq!(scheduled, Some(1_100));
+        let due_now = scheduled.unwrap();
+        let due_state = session
+            .inner
+            .lock()
+            .unwrap()
+            .client_lifecycle(due_now, false)
+            .0;
+        assert_eq!(due_state, ClientLeaseState::Orphaned);
+        assert_eq!(session.next_lifecycle_deadline_ms(due_now).unwrap(), None);
     }
 }
