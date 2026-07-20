@@ -97,8 +97,6 @@ export default {
   "group.supervisor": "Superviseur · Codex",
   "group.unowned": "Conversation Codex sans libellé",
   "group.subagentCount": "{n} sous-agents",
-  "group.closeHint":
-    "Fermer le superviseur termine tous les processus sous-agents Grok en dessous.",
   "group.closeAll": "Fermer tous les Grok de ce Codex",
   "group.closeAllAria":
     "Fermer tous les sous-agents Grok sous le superviseur {owner}",
@@ -122,19 +120,10 @@ export default {
   "session.meta.autoClose": "Compte à rebours auto-nettoyage",
   "session.meta.hook": "Dernier Hook",
   "session.meta.tool": "Outil actuel",
-  "session.lifecycle.connectedTitle": "Maintien de session actif",
-  "session.lifecycle.connectedBody":
-    "Le WebUI renouvelle le bail Codex ; cette session ne se fermera pas automatiquement tant qu’elle est connectée.",
   "session.lifecycle.disconnectedTitle":
     "Superviseur hors ligne — pas encore de fermeture",
   "session.lifecycle.disconnectedBody":
     "Les phases Running ou Waiting ne sont jamais fermées automatiquement. Le délai de grâce ne commence qu’après une phase Idle ou terminale sûre.",
-  "session.lifecycle.policyLeaseGrace":
-    "Après déconnexion : bail {lease}, puis grâce {grace} une fois Idle/terminal.",
-  "session.lifecycle.policyLease":
-    "Après déconnexion : bail {lease} avant qu’Idle/terminal puisse entrer en grâce.",
-  "session.lifecycle.policyGrace":
-    "Après déconnexion : grâce {grace} une fois Idle/terminal.",
   "session.lifecycle.orphanedTitle": "Compte à rebours de fermeture auto",
   "session.lifecycle.orphanedCountdown":
     "Éligible au nettoyage dans {remaining}",

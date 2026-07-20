@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "スーパーバイザー · Codex",
   "group.unowned": "ラベルなしの Codex 会話",
   "group.subagentCount": "{n} 個のサブエージェント",
-  "group.closeHint":
-    "スーパーバイザーを閉じると、その下のすべての Grok サブエージェント プロセスが終了します。",
   "group.closeAll": "この Codex の全 Grok を閉じる",
   "group.closeAllAria":
     "スーパーバイザー {owner} 下のすべての Grok サブエージェントを閉じる",
@@ -122,19 +120,10 @@ export default {
   "session.meta.cwd": "作業ディレクトリ",
   "session.terminalAria": "サブエージェント {title} の端末",
 
-  "session.lifecycle.connectedTitle": "キープアライブ中",
-  "session.lifecycle.connectedBody":
-    "WebUI が Codex リースを更新中です。接続中はこのセッションは自動終了しません。",
   "session.lifecycle.disconnectedTitle":
     "スーパーバイザー切断 — まだ終了しません",
   "session.lifecycle.disconnectedBody":
     "Running / Waiting 段階は自動終了しません。安全な Idle または終了状態になってから猶予が始まります。",
-  "session.lifecycle.policyLeaseGrace":
-    "切断後：リース {lease}、Idle/終了後に猶予 {grace}。",
-  "session.lifecycle.policyLease":
-    "切断後：Idle/終了が猶予に入る前のリース {lease}。",
-  "session.lifecycle.policyGrace":
-    "切断後：Idle/終了後の猶予 {grace}。",
   "session.lifecycle.orphanedTitle": "自動終了カウントダウン",
   "session.lifecycle.orphanedCountdown":
     "{remaining} 後にクリーンアップ対象になります",

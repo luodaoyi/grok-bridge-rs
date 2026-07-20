@@ -167,23 +167,19 @@ export function optionalDurationMs(value) {
 
 /**
  * Pure lifecycle model for managed-session auto-close UI.
- * Unmanaged sessions return kind "none" (no timeout messaging).
- * Missing lease/grace/deadline fields stay null — never invent defaults.
+ * Unmanaged and connected return kind "none" (no keep-alive / lease prose).
+ * Disconnected keeps a compact offline notice; orphaned/closing are risk states.
+ * Missing deadline fields stay null — never invent defaults.
  */
 export function lifecycleHintModel(session) {
   const state = session?.client_state;
-  if (!state || state === "unmanaged") {
+  if (!state || state === "unmanaged" || state === "connected") {
     return { kind: "none" };
   }
-  const leaseMs = optionalDurationMs(session.client_lease_ms);
-  const graceMs = optionalDurationMs(session.orphan_grace_ms);
   const deadlineMs = optionalDurationMs(session.auto_close_at_ms);
 
-  if (state === "connected") {
-    return { kind: "connected", leaseMs, graceMs };
-  }
   if (state === "disconnected") {
-    return { kind: "disconnected", leaseMs, graceMs };
+    return { kind: "disconnected" };
   }
   if (state === "orphaned") {
     return { kind: "orphaned", deadlineMs };
@@ -218,28 +214,6 @@ export function lifecycleCollapsedSummary(
     return t("session.lifecycle.collapsedOrphaned", {
       remaining: formatCountdown(model.deadlineMs, now, locale),
     });
-  }
-  return null;
-}
-
-/** Policy footnote when wire reports lease and/or grace durations. */
-export function lifecyclePolicyText(
-  model,
-  t = createTranslator("en"),
-  locale = "en",
-) {
-  const lease =
-    model.leaseMs != null ? formatDurationMs(model.leaseMs, locale) : null;
-  const grace =
-    model.graceMs != null ? formatDurationMs(model.graceMs, locale) : null;
-  if (lease && grace) {
-    return t("session.lifecycle.policyLeaseGrace", { lease, grace });
-  }
-  if (lease) {
-    return t("session.lifecycle.policyLease", { lease });
-  }
-  if (grace) {
-    return t("session.lifecycle.policyGrace", { grace });
   }
   return null;
 }

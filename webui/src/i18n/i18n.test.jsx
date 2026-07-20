@@ -78,7 +78,7 @@ describe("catalog completeness", () => {
   it("keeps the same keys for all thirteen locales", () => {
     expect(SUPPORTED_LOCALES).toEqual(EXPECTED_LOCALES);
     expect(SUPPORTED_LOCALES).toHaveLength(13);
-    expect(MESSAGE_KEYS.length).toBe(141);
+    expect(MESSAGE_KEYS.length).toBe(135);
     for (const locale of SUPPORTED_LOCALES) {
       const keys = Object.keys(catalogs[locale]).sort();
       expect(keys).toEqual(MESSAGE_KEYS);

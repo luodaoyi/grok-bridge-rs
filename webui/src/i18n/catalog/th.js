@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "ซูเปอร์ไวเซอร์ · Codex",
   "group.unowned": "บทสนทนา Codex ที่ไม่มีป้ายกำกับ",
   "group.subagentCount": "ซับเอเจนต์ {n} รายการ",
-  "group.closeHint":
-    "การปิดซูเปอร์ไวเซอร์จะยุติโปรเซส Grok ซับเอเจนต์ทั้งหมดภายใต้",
   "group.closeAll": "ปิด Grok ทั้งหมดของ Codex นี้",
   "group.closeAllAria":
     "ปิด Grok ซับเอเจนต์ทั้งหมดภายใต้ซูเปอร์ไวเซอร์ {owner}",
@@ -122,18 +120,9 @@ export default {
   "session.meta.cwd": "ไดเรกทอรีทำงาน",
   "session.terminalAria": "เทอร์มินัลของซับเอเจนต์ {title}",
 
-  "session.lifecycle.connectedTitle": "คีปอะไลฟ์ทำงานอยู่",
-  "session.lifecycle.connectedBody":
-    "WebUI กำลังต่ออายุ lease ของ Codex เซสชันนี้จะไม่ปิดอัตโนมัติขณะเชื่อมต่ออยู่",
   "session.lifecycle.disconnectedTitle": "ซูเปอร์ไวเซอร์ออฟไลน์ — ยังไม่ปิด",
   "session.lifecycle.disconnectedBody":
     "ขั้น Running หรือ Waiting จะไม่ถูกปิดอัตโนมัติ ระยะผ่อนผันเริ่มหลังถึงสถานะ Idle หรือสถานะปลายทางที่ปลอดภัยเท่านั้น",
-  "session.lifecycle.policyLeaseGrace":
-    "หลังตัดการเชื่อมต่อ: lease {lease} จากนั้นระยะผ่อนผัน {grace} เมื่อ Idle/สถานะปลายทาง",
-  "session.lifecycle.policyLease":
-    "หลังตัดการเชื่อมต่อ: lease {lease} ก่อน Idle/สถานะปลายทางจะเข้าสู่ระยะผ่อนผัน",
-  "session.lifecycle.policyGrace":
-    "หลังตัดการเชื่อมต่อ: ระยะผ่อนผัน {grace} เมื่อ Idle/สถานะปลายทาง",
   "session.lifecycle.orphanedTitle": "นับถอยหลังปิดอัตโนมัติ",
   "session.lifecycle.orphanedCountdown": "มีสิทธิ์ล้างใน {remaining}",
   "session.lifecycle.orphanedCountdownDue":

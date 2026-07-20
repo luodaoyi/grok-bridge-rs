@@ -97,8 +97,6 @@ export default {
   "group.supervisor": "Супервизор · Codex",
   "group.unowned": "Диалог Codex без метки",
   "group.subagentCount": "{n} субагентов",
-  "group.closeHint":
-    "Закрытие супервизора завершает все процессы субагентов Grok под ним.",
   "group.closeAll": "Закрыть все Grok этого Codex",
   "group.closeAllAria":
     "Закрыть все субагенты Grok под супервизором {owner}",
@@ -122,19 +120,10 @@ export default {
   "session.meta.autoClose": "Обратный отсчёт автоочистки",
   "session.meta.hook": "Последний Hook",
   "session.meta.tool": "Текущий инструмент",
-  "session.lifecycle.connectedTitle": "Поддержание сессии активно",
-  "session.lifecycle.connectedBody":
-    "WebUI продлевает аренду Codex; пока соединение есть, сессия не закроется автоматически.",
   "session.lifecycle.disconnectedTitle":
     "Супервизор офлайн — закрытие ещё не начато",
   "session.lifecycle.disconnectedBody":
     "Фазы Running или Waiting никогда не закрываются автоматически. Льготный период начинается только после безопасного Idle или конечного состояния.",
-  "session.lifecycle.policyLeaseGrace":
-    "После отключения: аренда {lease}, затем льготный период {grace} после Idle/финала.",
-  "session.lifecycle.policyLease":
-    "После отключения: аренда {lease}, прежде чем Idle/финал войдёт в льготный период.",
-  "session.lifecycle.policyGrace":
-    "После отключения: льготный период {grace} после Idle/финала.",
   "session.lifecycle.orphanedTitle": "Обратный отсчёт автозакрытия",
   "session.lifecycle.orphanedCountdown":
     "Право на очистку через {remaining}",

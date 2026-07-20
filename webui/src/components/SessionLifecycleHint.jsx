@@ -1,17 +1,9 @@
 import { useI18n } from "../i18n/index.js";
-import {
-  countdownLabel,
-  lifecycleHintModel,
-  lifecyclePolicyText,
-} from "../sessions.js";
-
-/** Subtle text-only tip for healthy keep-alive. */
-const COMPACT_CONNECTED =
-  "my-1 text-[11px] leading-snug text-[var(--connected-text)]";
+import { countdownLabel, lifecycleHintModel } from "../sessions.js";
 
 /**
  * Compact but distinguishable offline tip: soft fill + thin accent, still one line.
- * Visually stronger than connected, weaker than risk cards.
+ * Visually stronger than connected (no banner), weaker than risk cards.
  */
 const COMPACT_DISCONNECTED =
   "my-1 rounded border-l-2 border-[var(--disconnected-text)] bg-[var(--disconnected-bg)] px-2 py-0.5 text-[11px] leading-snug text-[var(--disconnected-text)]";
@@ -29,7 +21,8 @@ const PROMINENT_TONE = {
 
 /**
  * Adaptive managed-session lifecycle hint.
- * Connected / disconnected: compact density (saves vertical space).
+ * Connected: no banner (keep-alive/lease/grace prose removed).
+ * Disconnected: compact offline notice (no lease/grace policy footnotes).
  * Orphaned / closing: prominent risk density (countdown and cleanup safety).
  * Orphaned countdown uses the parent-owned `now` clock (one interval per session).
  */
@@ -39,34 +32,7 @@ export function SessionLifecycleHint({ session, now = Date.now() }) {
 
   if (model.kind === "none") return null;
 
-  if (model.kind === "connected") {
-    const policy = lifecyclePolicyText(model, t, locale);
-    return (
-      <div
-        className={COMPACT_CONNECTED}
-        data-lifecycle-hint="connected"
-        data-density="compact"
-        role="status"
-      >
-        <span className="font-semibold tracking-tight">
-          {t("session.lifecycle.connectedTitle")}
-        </span>
-        <span className="opacity-90">
-          {" — "}
-          {t("session.lifecycle.connectedBody")}
-        </span>
-        {policy ? (
-          <span className="opacity-80">
-            {" "}
-            {policy}
-          </span>
-        ) : null}
-      </div>
-    );
-  }
-
   if (model.kind === "disconnected") {
-    const policy = lifecyclePolicyText(model, t, locale);
     return (
       <div
         className={COMPACT_DISCONNECTED}
@@ -81,12 +47,6 @@ export function SessionLifecycleHint({ session, now = Date.now() }) {
           {" — "}
           {t("session.lifecycle.disconnectedBody")}
         </span>
-        {policy ? (
-          <span className="opacity-90">
-            {" "}
-            {policy}
-          </span>
-        ) : null}
       </div>
     );
   }

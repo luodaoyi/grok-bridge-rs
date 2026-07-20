@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "Giám sát viên · Codex",
   "group.unowned": "Cuộc hội thoại Codex chưa gắn nhãn",
   "group.subagentCount": "{n} agent con",
-  "group.closeHint":
-    "Đóng giám sát viên sẽ chấm dứt mọi tiến trình agent con Grok bên dưới.",
   "group.closeAll": "Đóng tất cả Grok của Codex này",
   "group.closeAllAria":
     "Đóng tất cả agent con Grok dưới giám sát viên {owner}",
@@ -122,18 +120,9 @@ export default {
   "session.meta.cwd": "Thư mục làm việc",
   "session.terminalAria": "Terminal của agent con {title}",
 
-  "session.lifecycle.connectedTitle": "Keep-alive đang hoạt động",
-  "session.lifecycle.connectedBody":
-    "WebUI đang gia hạn lease Codex; phiên này sẽ không tự đóng khi còn kết nối.",
   "session.lifecycle.disconnectedTitle": "Giám sát viên ngoại tuyến — chưa đóng",
   "session.lifecycle.disconnectedBody":
     "Các giai đoạn Running hoặc Waiting không bao giờ bị tự đóng. Thời gian ân hạn chỉ bắt đầu sau khi vào Idle an toàn hoặc giai đoạn kết thúc.",
-  "session.lifecycle.policyLeaseGrace":
-    "Sau khi ngắt: lease {lease}, rồi ân hạn {grace} khi đã Idle/kết thúc.",
-  "session.lifecycle.policyLease":
-    "Sau khi ngắt: lease {lease} trước khi Idle/kết thúc có thể vào ân hạn.",
-  "session.lifecycle.policyGrace":
-    "Sau khi ngắt: ân hạn {grace} khi đã Idle/kết thúc.",
   "session.lifecycle.orphanedTitle": "Đếm ngược tự đóng",
   "session.lifecycle.orphanedCountdown": "Đủ điều kiện dọn dẹp sau {remaining}",
   "session.lifecycle.orphanedCountdownDue":

@@ -14,7 +14,6 @@ import {
   groupSummary,
   lifecycleCollapsedSummary,
   lifecycleHintModel,
-  lifecyclePolicyText,
   optionalDurationMs,
   ownerKey,
   remainingLabel,
@@ -157,50 +156,27 @@ describe("lifecycle hint model", () => {
     expect(formatDurationMs(120_000, "en")).toMatch(/2|minute|min/i);
   });
 
-  it("models connected with optional wire lease/grace only", () => {
+  it("hides connected keep-alive/lease/grace from the lifecycle model", () => {
     expect(
       lifecycleHintModel({
         client_state: "connected",
         client_lease_ms: 120_000,
         orphan_grace_ms: 600_000,
       }),
-    ).toEqual({
-      kind: "connected",
-      leaseMs: 120_000,
-      graceMs: 600_000,
-    });
+    ).toEqual({ kind: "none" });
     expect(lifecycleHintModel({ client_state: "connected" })).toEqual({
-      kind: "connected",
-      leaseMs: null,
-      graceMs: null,
+      kind: "none",
     });
-    expect(
-      lifecyclePolicyText(
-        { kind: "connected", leaseMs: 120_000, graceMs: 600_000 },
-        t,
-        "en",
-      ),
-    ).toMatch(/lease|grace/i);
-    expect(
-      lifecyclePolicyText(
-        { kind: "connected", leaseMs: null, graceMs: null },
-        t,
-        "en",
-      ),
-    ).toBeNull();
   });
 
-  it("models disconnected without a fixed deadline", () => {
+  it("models disconnected without lease/grace policy footnotes", () => {
     expect(
       lifecycleHintModel({
         client_state: "disconnected",
         client_lease_ms: 120_000,
+        orphan_grace_ms: 600_000,
       }),
-    ).toEqual({
-      kind: "disconnected",
-      leaseMs: 120_000,
-      graceMs: null,
-    });
+    ).toEqual({ kind: "disconnected" });
   });
 
   it("models orphaned deadline and second-precise countdown", () => {

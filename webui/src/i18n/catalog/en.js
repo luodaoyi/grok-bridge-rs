@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "Supervisor · Codex",
   "group.unowned": "Unlabeled Codex conversation",
   "group.subagentCount": "{n} subagents",
-  "group.closeHint":
-    "Closing the supervisor terminates all Grok subagent processes under it.",
   "group.closeAll": "Close all Grok for this Codex",
   "group.closeAllAria":
     "Close all Grok subagents under supervisor {owner}",
@@ -122,18 +120,9 @@ export default {
   "session.meta.cwd": "Working directory",
   "session.terminalAria": "Terminal for subagent {title}",
 
-  "session.lifecycle.connectedTitle": "Keep-alive active",
-  "session.lifecycle.connectedBody":
-    "WebUI is renewing the Codex lease; this session will not auto-close while connected.",
   "session.lifecycle.disconnectedTitle": "Supervisor offline — not closing yet",
   "session.lifecycle.disconnectedBody":
     "Running or Waiting stages are never auto-closed. Grace starts only after a safe Idle or terminal stage.",
-  "session.lifecycle.policyLeaseGrace":
-    "After disconnect: lease {lease}, then grace {grace} once Idle/terminal.",
-  "session.lifecycle.policyLease":
-    "After disconnect: lease {lease} before Idle/terminal can enter grace.",
-  "session.lifecycle.policyGrace":
-    "After disconnect: grace {grace} once Idle/terminal.",
   "session.lifecycle.orphanedTitle": "Auto-close countdown",
   "session.lifecycle.orphanedCountdown": "Eligible for cleanup in {remaining}",
   "session.lifecycle.orphanedCountdownDue":

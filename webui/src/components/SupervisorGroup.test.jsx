@@ -5,6 +5,7 @@ import { I18nProvider } from "../i18n/index.js";
 import { MockXTerm } from "../test/mockXterm.js";
 import { activityLabel, activityOf } from "../sessions.js";
 import { createTranslator } from "../i18n/translate.js";
+import { TERMINAL_HEIGHT_DEFAULT } from "../utils/terminalHeight.js";
 import { SupervisorGroup } from "./SupervisorGroup.jsx";
 
 vi.mock("@xterm/xterm", () => ({
@@ -91,6 +92,12 @@ describe("SupervisorGroup session tabs", () => {
         disconnect() {}
       },
     );
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      writable: true,
+      value: 1200,
+    });
+    localStorage.clear();
   });
 
   afterEach(async () => {
@@ -333,5 +340,60 @@ describe("SupervisorGroup session tabs", () => {
     expect(closeBtn).not.toBeUndefined();
     await act(async () => closeBtn.click());
     expect(onCloseSession).toHaveBeenCalledWith("gbt-2");
+  });
+
+  it("places close-all in the summary header and does not toggle details on click", async () => {
+    const onCloseGroup = vi.fn();
+    const onToggle = vi.fn();
+    await renderGroup(multiSessions, { onCloseGroup, onToggle, collapsed: false });
+
+    const details = container.querySelector("details");
+    expect(details.open).toBe(true);
+    const summary = details.querySelector("summary");
+    const closeAll = summary.querySelector('[data-close-all-group="true"]');
+    expect(closeAll).not.toBeNull();
+    // No standalone body row for close-all / closeHint.
+    expect(container.textContent).not.toMatch(
+      /terminates all Grok subagent processes/i,
+    );
+    expect(
+      details.querySelector(
+        '.border-t [data-close-all-group="true"], .border-b [data-close-all-group="true"]',
+      ),
+    ).toBeNull();
+
+    await act(async () => closeAll.click());
+    expect(onCloseGroup).toHaveBeenCalledWith(
+      "Codex Tab Owner",
+      "thread-tabs",
+      3,
+    );
+    // Clicking the header action must not collapse the group.
+    expect(details.open).toBe(true);
+    expect(onToggle).not.toHaveBeenCalledWith(false);
+  });
+
+  it("syncs terminal height across sessions in the same supervisor group", async () => {
+    await renderGroup(multiSessions);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const shells = [...container.querySelectorAll("[data-terminal]")];
+    expect(shells.length).toBeGreaterThanOrEqual(3);
+    for (const shell of shells) {
+      expect(Number(shell.dataset.terminalHeight)).toBe(TERMINAL_HEIGHT_DEFAULT);
+    }
+    const handle = shells[0].querySelector("[data-terminal-resize]");
+    await act(async () => {
+      handle.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    for (const shell of shells) {
+      expect(Number(shell.dataset.terminalHeight)).toBe(
+        TERMINAL_HEIGHT_DEFAULT + 24,
+      );
+    }
   });
 });

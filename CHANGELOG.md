@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 - 2026-07-20
+
+- Moved the WebUI “close all Grok for this Codex” control into the supervisor group header so it no longer occupies a standalone body row, without toggling the details group when clicked.
+- Doubled the default xterm.js terminal height from 280px to 560px (still clamped by the existing min/max and viewport cap) and made height a single Codex-group-scoped setting that syncs across every Grok terminal in that group and persists across reload without affecting other groups.
+- Removed connected keep-alive and post-disconnect lease/grace explanatory banners from the WebUI in every locale, while retaining disconnected offline notices and orphaned/closing cleanup risk messaging.
+
 ## 0.8.0 - 2026-07-19
 
 - Localized the WebUI into 13 languages with persisted browser detection, an accessible themed language picker, locale-aware formatting, and right-to-left Arabic layout.

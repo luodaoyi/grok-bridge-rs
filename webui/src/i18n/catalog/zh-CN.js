@@ -94,7 +94,6 @@ export default {
   "group.supervisor": "监督者 · Codex",
   "group.unowned": "未标记的 Codex 对话",
   "group.subagentCount": "{n} 个子代理",
-  "group.closeHint": "关闭监督者会终止其下全部 Grok 子代理进程。",
   "group.closeAll": "关闭该 Codex 全部 Grok",
   "group.closeAllAria": "关闭监督者 {owner} 下的全部 Grok 子代理",
   "group.summary.working": "{n} 个工作中",
@@ -120,18 +119,9 @@ export default {
   "session.meta.cwd": "工作目录",
   "session.terminalAria": "子代理 {title} 的终端画面",
 
-  "session.lifecycle.connectedTitle": "正在保活",
-  "session.lifecycle.connectedBody":
-    "WebUI 正在续租 Codex 租约；连接期间不会自动关闭此会话。",
   "session.lifecycle.disconnectedTitle": "监督者已断开 — 尚未开始关闭",
   "session.lifecycle.disconnectedBody":
     "Running / Waiting 阶段不会自动关闭；进入安全的 Idle 或终态后才开始宽限期。",
-  "session.lifecycle.policyLeaseGrace":
-    "断连后：租约 {lease}，进入 Idle/终态后再宽限 {grace}。",
-  "session.lifecycle.policyLease":
-    "断连后：租约 {lease}，之后 Idle/终态才可进入宽限。",
-  "session.lifecycle.policyGrace":
-    "断连后：进入 Idle/终态后宽限 {grace}。",
   "session.lifecycle.orphanedTitle": "自动关闭倒计时",
   "session.lifecycle.orphanedCountdown": "将在 {remaining} 后具备清理资格",
   "session.lifecycle.orphanedCountdownDue":

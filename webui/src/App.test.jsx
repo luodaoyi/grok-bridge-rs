@@ -457,7 +457,7 @@ describe("App", () => {
     expect(container.querySelector('[data-lifecycle-hint="orphaned"]')).not.toBeNull();
   });
 
-  it("shows keep-alive lifecycle for connected managed sessions", async () => {
+  it("hides connected keep-alive/lease/grace banners from the WebUI", async () => {
     await renderAppAndConnect([
       {
         ...sessions[0],
@@ -466,9 +466,10 @@ describe("App", () => {
         orphan_grace_ms: 600_000,
       },
     ]);
-    const hint = container.querySelector('[data-lifecycle-hint="connected"]');
-    expect(hint).not.toBeNull();
-    expect(hint.textContent).toMatch(/正在保活|不会自动关闭/);
+    expect(container.querySelector("[data-lifecycle-hint]")).toBeNull();
+    expect(container.textContent).not.toMatch(
+      /正在保活|不会自动关闭|断连后|续租|宽限/,
+    );
   });
 
   it("does not invent timeout messaging for unmanaged sessions", async () => {

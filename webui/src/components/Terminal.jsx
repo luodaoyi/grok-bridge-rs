@@ -16,6 +16,7 @@ import {
   clampTerminalHeight,
   maxTerminalHeight,
   readTerminalHeight,
+  subscribeTerminalHeight,
   writeTerminalHeight,
 } from "../utils/terminalHeight.js";
 import {
@@ -140,7 +141,7 @@ export function fitTerminalHost(fitAddon, host) {
  * terminal_resize follows visible fit always (viewport sync).
  * terminal_input is gated strictly by the global interactive switch.
  */
-export function Terminal({ id, rows, cols, label }) {
+export function Terminal({ id, heightKey, rows, cols, label }) {
   const { t } = useI18n();
   const {
     interactive,
@@ -161,12 +162,16 @@ export function Terminal({ id, rows, cols, label }) {
   const onDataDisposableRef = useRef(null);
   const lastSentSizeRef = useRef({ cols: 0, rows: 0 });
   const resizeTimerRef = useRef(0);
+  // Height is scoped to the Codex supervisor group, not the Grok session.
+  const groupHeightKey = heightKey;
 
   interactiveRef.current = interactive;
   sendInputRef.current = sendTerminalInput;
   sendResizeRef.current = sendTerminalResize;
 
-  const [height, setHeight] = useState(() => readTerminalHeight(id));
+  const [height, setHeight] = useState(() =>
+    readTerminalHeight(groupHeightKey),
+  );
 
   const maybeSendResize = useCallback((term) => {
     if (!term) return;
@@ -206,15 +211,18 @@ export function Terminal({ id, rows, cols, label }) {
 
   const applyHeight = useCallback(
     (next) => {
-      const clamped = clampTerminalHeight(next);
-      setHeight(clamped);
-      writeTerminalHeight(id, clamped);
+      // Persists + notifies same-group terminals; always update local height.
+      setHeight(writeTerminalHeight(groupHeightKey, next));
     },
-    [id],
+    [groupHeightKey],
   );
 
   useEffect(() => {
-    setHeight(readTerminalHeight(id));
+    setHeight(readTerminalHeight(groupHeightKey));
+    return subscribeTerminalHeight(groupHeightKey, setHeight);
+  }, [groupHeightKey]);
+
+  useEffect(() => {
     lastSentSizeRef.current = { cols: 0, rows: 0 };
   }, [id]);
 

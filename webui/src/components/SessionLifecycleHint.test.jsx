@@ -86,7 +86,7 @@ describe("SessionLifecycleHint", () => {
     });
   }
 
-  it("shows keep-alive for connected managed sessions with policy durations", async () => {
+  it("renders no connected keep-alive or lease/grace banner", async () => {
     await renderHint(
       baseSession({
         client_state: "connected",
@@ -94,31 +94,13 @@ describe("SessionLifecycleHint", () => {
         orphan_grace_ms: 600_000,
       }),
     );
-    const el = container.querySelector('[data-lifecycle-hint="connected"]');
-    expect(el).not.toBeNull();
-    expect(el.getAttribute("data-density")).toBe("compact");
-    expect(el.querySelectorAll("p")).toHaveLength(0);
-    expect(el.textContent).toMatch(/Keep-alive active/i);
-    expect(el.textContent).toMatch(/will not auto-close/i);
-    expect(el.textContent).toMatch(/lease/i);
-    expect(el.textContent).toMatch(/grace/i);
-    // Should surface real wire durations, not invent other numbers.
-    expect(el.textContent).toMatch(/2/);
-    expect(el.textContent).toMatch(/10/);
+    expect(container.querySelector("[data-lifecycle-hint]")).toBeNull();
+    expect(container.textContent).not.toMatch(
+      /Keep-alive|will not auto-close|After disconnect|lease|grace/i,
+    );
   });
 
-  it("does not invent lease/grace when wire fields are missing", async () => {
-    await renderHint(baseSession({ client_state: "connected" }));
-    const el = container.querySelector('[data-lifecycle-hint="connected"]');
-    expect(el).not.toBeNull();
-    expect(el.getAttribute("data-density")).toBe("compact");
-    expect(el.textContent).toMatch(/Keep-alive active/i);
-    expect(el.textContent).not.toMatch(/After disconnect/i);
-    expect(el.textContent).not.toMatch(/120/);
-    expect(el.textContent).not.toMatch(/600/);
-  });
-
-  it("explains disconnected policy without a fixed close deadline", async () => {
+  it("explains disconnected offline risk without lease/grace policy footnotes", async () => {
     await renderHint(
       baseSession({
         client_state: "disconnected",
@@ -134,6 +116,7 @@ describe("SessionLifecycleHint", () => {
     expect(el.textContent).toMatch(/not closing yet|offline/i);
     expect(el.textContent).toMatch(/Running or Waiting/i);
     expect(el.textContent).toMatch(/Idle/i);
+    expect(el.textContent).not.toMatch(/After disconnect/i);
     expect(el.querySelector("[data-lifecycle-countdown]")).toBeNull();
   });
 
@@ -201,22 +184,7 @@ describe("SessionLifecycleHint", () => {
     expect(el.textContent).toMatch(/being closed/i);
   });
 
-  it("uses compact density for normal states and prominent density for cleanup risk", async () => {
-    await renderHint(
-      baseSession({
-        client_state: "connected",
-        client_lease_ms: 120_000,
-        orphan_grace_ms: 600_000,
-      }),
-    );
-    const connected = container.querySelector(
-      '[data-lifecycle-hint="connected"]',
-    );
-    expect(connected.getAttribute("data-density")).toBe("compact");
-    expect(connected.getAttribute("role")).toBe("status");
-    // Compact tips stay single-block (no multi-paragraph card structure).
-    expect(connected.querySelectorAll("p")).toHaveLength(0);
-
+  it("uses compact density for disconnected and prominent density for cleanup risk", async () => {
     await renderHint(baseSession({ client_state: "disconnected" }));
     const disconnected = container.querySelector(
       '[data-lifecycle-hint="disconnected"]',

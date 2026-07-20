@@ -14,7 +14,14 @@ import { SessionLifecycleHint } from "./SessionLifecycleHint.jsx";
 import { ActivityBadge, LifecycleBadge } from "./StatusBadge.jsx";
 import { Terminal } from "./Terminal.jsx";
 
-export function SubagentCard({ session, collapsed, onToggle, onClose, busy }) {
+export function SubagentCard({
+  session,
+  heightKey,
+  collapsed,
+  onToggle,
+  onClose,
+  busy,
+}) {
   const { t, locale } = useI18n();
   const activity = activityOf(session);
   const title = session.title || session.session;
@@ -132,6 +139,7 @@ export function SubagentCard({ session, collapsed, onToggle, onClose, busy }) {
         )}
         <Terminal
           id={session.session}
+          heightKey={heightKey}
           rows={session.rows}
           cols={session.cols}
           label={t("session.terminalAria", { title })}

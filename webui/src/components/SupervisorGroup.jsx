@@ -128,28 +128,27 @@ export function SupervisorGroup({
         <span className="shrink-0 rounded-full border border-[var(--pill-border)] bg-[var(--pill-bg)] px-2.5 py-1 text-[11px] font-bold break-words text-[var(--accent-text)]">
           {t("group.subagentCount", { n: formatNumber(sessions.length) })}
         </span>
+        {owner == null && clientSessionId == null ? null : (
+          <button
+            className={`${dangerButton} shrink-0 max-sm:min-h-10 whitespace-normal`}
+            type="button"
+            disabled={busy}
+            aria-label={t("group.closeAllAria", { owner: displayOwner })}
+            data-close-all-group="true"
+            onClick={(event) => {
+              // Buttons inside <summary> must not toggle the details group.
+              event.preventDefault();
+              event.stopPropagation();
+              onCloseGroup(owner, clientSessionId, sessions.length);
+            }}
+          >
+            <Trash2 aria-hidden="true" size={14} className="shrink-0" />
+            <span className="min-w-0 break-words">{t("group.closeAll")}</span>
+          </button>
+        )}
       </summary>
       {/* Keep children mounted when collapsed so session terminals stay alive. */}
       <div className="border-t border-[var(--group-body-border)] bg-[var(--group-body-bg)]">
-        {owner == null && clientSessionId == null ? null : (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--group-body-border)] px-3 py-2.5 sm:px-4">
-            <p className="min-w-0 flex-1 text-[11px] leading-5 break-words text-[var(--subtle)]">
-              {t("group.closeHint")}
-            </p>
-            <button
-              className={`${dangerButton} max-sm:w-full max-sm:min-h-10 whitespace-normal text-left`}
-              type="button"
-              disabled={busy}
-              aria-label={t("group.closeAllAria", { owner: displayOwner })}
-              onClick={() =>
-                onCloseGroup(owner, clientSessionId, sessions.length)
-              }
-            >
-              <Trash2 aria-hidden="true" size={14} className="shrink-0" />
-              <span className="min-w-0 break-words">{t("group.closeAll")}</span>
-            </button>
-          </div>
-        )}
         {sessions.length > 0 ? (
           <>
             <div
@@ -217,6 +216,7 @@ export function SupervisorGroup({
                 >
                   <SubagentCard
                     session={session}
+                    heightKey={groupKey}
                     collapsed={collapsedSessions.has(session.session)}
                     onToggle={(open) => onToggleSession(session.session, open)}
                     onClose={onCloseSession}

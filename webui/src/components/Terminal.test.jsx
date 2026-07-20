@@ -121,6 +121,12 @@ describe("Terminal (xterm read-only)", () => {
       rafQueue[id - 1] = null;
     });
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    // Tall viewport so default 560px is below the 0.7vh cap during height tests.
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      writable: true,
+      value: 1200,
+    });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -166,6 +172,7 @@ describe("Terminal (xterm read-only)", () => {
           <TerminalIOContext.Provider value={ioState}>
             <Terminal
               id={props.id ?? "gbt-1"}
+              heightKey={props.heightKey ?? "client:test-group"}
               rows={props.rows ?? 24}
               cols={props.cols ?? 80}
               label={props.label ?? "term"}
@@ -189,7 +196,13 @@ describe("Terminal (xterm read-only)", () => {
       root.render(
         <I18nProvider initialLocale="en">
           <TerminalIOContext.Provider value={ioState}>
-            <Terminal id="gbt-1" rows={24} cols={80} label="term" />
+            <Terminal
+              id="gbt-1"
+              heightKey="client:test-group"
+              rows={24}
+              cols={80}
+              label="term"
+            />
           </TerminalIOContext.Provider>
         </I18nProvider>,
       );
@@ -450,25 +463,44 @@ describe("Terminal (xterm read-only)", () => {
     expect(Number(shell.dataset.terminalHeight)).toBe(
       TERMINAL_HEIGHT_DEFAULT + 24,
     );
-    expect(localStorage.getItem(terminalHeightStorageKey("gbt-1"))).toBe(
-      String(TERMINAL_HEIGHT_DEFAULT + 24),
-    );
+    expect(
+      localStorage.getItem(terminalHeightStorageKey("client:test-group")),
+    ).toBe(String(TERMINAL_HEIGHT_DEFAULT + 24));
     expect(MockXTerm.instances).toHaveLength(1);
     expect(MockXTerm.instances[0]).toBe(term);
     expect(fit.fitCount).toBeGreaterThan(beforeFits);
   });
 
-  it("keeps per-session heights independent", async () => {
-    localStorage.setItem(terminalHeightStorageKey("gbt-a"), "200");
-    localStorage.setItem(terminalHeightStorageKey("gbt-b"), "400");
+  it("shares height within a group and isolates other groups", async () => {
+    localStorage.setItem(terminalHeightStorageKey("client:group-a"), "200");
+    localStorage.setItem(terminalHeightStorageKey("client:group-b"), "400");
 
     await act(async () => {
       root.render(
         <I18nProvider initialLocale="en">
           <TerminalIOContext.Provider value={ioState}>
             <div>
-              <Terminal id="gbt-a" rows={24} cols={80} label="a" />
-              <Terminal id="gbt-b" rows={24} cols={80} label="b" />
+              <Terminal
+                id="gbt-a1"
+                heightKey="client:group-a"
+                rows={24}
+                cols={80}
+                label="a1"
+              />
+              <Terminal
+                id="gbt-a2"
+                heightKey="client:group-a"
+                rows={24}
+                cols={80}
+                label="a2"
+              />
+              <Terminal
+                id="gbt-b1"
+                heightKey="client:group-b"
+                rows={24}
+                cols={80}
+                label="b1"
+              />
             </div>
           </TerminalIOContext.Provider>
         </I18nProvider>,
@@ -479,9 +511,30 @@ describe("Terminal (xterm read-only)", () => {
     });
 
     const shells = [...container.querySelectorAll("[data-terminal]")];
-    expect(shells).toHaveLength(2);
+    expect(shells).toHaveLength(3);
     expect(Number(shells[0].dataset.terminalHeight)).toBe(200);
-    expect(Number(shells[1].dataset.terminalHeight)).toBe(400);
+    expect(Number(shells[1].dataset.terminalHeight)).toBe(200);
+    expect(Number(shells[2].dataset.terminalHeight)).toBe(400);
+
+    // Resize one terminal in group-a; sibling in same group follows immediately.
+    const handleA1 = container
+      .querySelector('[data-terminal="gbt-a1"]')
+      .querySelector("[data-terminal-resize]");
+    await act(async () => {
+      handleA1.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    await flushRaf();
+    expect(Number(shells[0].dataset.terminalHeight)).toBe(224);
+    expect(Number(shells[1].dataset.terminalHeight)).toBe(224);
+    expect(Number(shells[2].dataset.terminalHeight)).toBe(400);
+    expect(localStorage.getItem(terminalHeightStorageKey("client:group-a"))).toBe(
+      "224",
+    );
+    expect(localStorage.getItem(terminalHeightStorageKey("client:group-b"))).toBe(
+      "400",
+    );
   });
 
   it("clamps oversized stored heights so the page cannot be infinitely stretched", () => {

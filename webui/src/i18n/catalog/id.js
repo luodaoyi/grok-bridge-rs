@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "Supervisor · Codex",
   "group.unowned": "Percakapan Codex tanpa label",
   "group.subagentCount": "{n} subagen",
-  "group.closeHint":
-    "Menutup supervisor akan menghentikan semua proses subagen Grok di bawahnya.",
   "group.closeAll": "Tutup semua Grok untuk Codex ini",
   "group.closeAllAria":
     "Tutup semua subagen Grok di bawah supervisor {owner}",
@@ -122,18 +120,9 @@ export default {
   "session.meta.cwd": "Direktori kerja",
   "session.terminalAria": "Terminal untuk subagen {title}",
 
-  "session.lifecycle.connectedTitle": "Keep-alive aktif",
-  "session.lifecycle.connectedBody":
-    "WebUI sedang memperbarui sewa Codex; sesi ini tidak akan ditutup otomatis selama terhubung.",
   "session.lifecycle.disconnectedTitle": "Supervisor luring — belum ditutup",
   "session.lifecycle.disconnectedBody":
     "Tahap Running atau Waiting tidak pernah ditutup otomatis. Masa tenggang dimulai hanya setelah tahap Idle atau terminal yang aman.",
-  "session.lifecycle.policyLeaseGrace":
-    "Setelah terputus: sewa {lease}, lalu tenggang {grace} setelah Idle/terminal.",
-  "session.lifecycle.policyLease":
-    "Setelah terputus: sewa {lease} sebelum Idle/terminal dapat memasuki tenggang.",
-  "session.lifecycle.policyGrace":
-    "Setelah terputus: tenggang {grace} setelah Idle/terminal.",
   "session.lifecycle.orphanedTitle": "Hitung mundur penutupan otomatis",
   "session.lifecycle.orphanedCountdown": "Memenuhi syarat pembersihan dalam {remaining}",
   "session.lifecycle.orphanedCountdownDue":

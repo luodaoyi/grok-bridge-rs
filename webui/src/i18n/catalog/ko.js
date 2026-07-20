@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "슈퍼바이저 · Codex",
   "group.unowned": "레이블 없는 Codex 대화",
   "group.subagentCount": "서브에이전트 {n}개",
-  "group.closeHint":
-    "슈퍼바이저를 닫으면 그 아래의 모든 Grok 서브에이전트 프로세스가 종료됩니다.",
   "group.closeAll": "이 Codex의 모든 Grok 닫기",
   "group.closeAllAria":
     "슈퍼바이저 {owner} 아래의 모든 Grok 서브에이전트 닫기",
@@ -122,19 +120,10 @@ export default {
   "session.meta.cwd": "작업 디렉터리",
   "session.terminalAria": "서브에이전트 {title} 터미널",
 
-  "session.lifecycle.connectedTitle": "킵얼라이브 활성",
-  "session.lifecycle.connectedBody":
-    "WebUI가 Codex 임대를 갱신 중입니다. 연결 중에는 이 세션이 자동 종료되지 않습니다.",
   "session.lifecycle.disconnectedTitle":
     "슈퍼바이저 오프라인 — 아직 종료하지 않음",
   "session.lifecycle.disconnectedBody":
     "Running / Waiting 단계는 자동 종료되지 않습니다. 안전한 Idle 또는 종료 상태 이후에만 유예가 시작됩니다.",
-  "session.lifecycle.policyLeaseGrace":
-    "연결 끊김 후: 임대 {lease}, Idle/종료 후 유예 {grace}.",
-  "session.lifecycle.policyLease":
-    "연결 끊김 후: Idle/종료가 유예에 들어가기 전 임대 {lease}.",
-  "session.lifecycle.policyGrace":
-    "연결 끊김 후: Idle/종료 후 유예 {grace}.",
   "session.lifecycle.orphanedTitle": "자동 종료 카운트다운",
   "session.lifecycle.orphanedCountdown":
     "{remaining} 후 정리 대상이 됩니다",

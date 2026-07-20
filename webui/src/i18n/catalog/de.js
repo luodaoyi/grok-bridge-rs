@@ -97,8 +97,6 @@ export default {
   "group.supervisor": "Supervisor · Codex",
   "group.unowned": "Unbeschriftete Codex-Unterhaltung",
   "group.subagentCount": "{n} Subagenten",
-  "group.closeHint":
-    "Das Schließen des Supervisors beendet alle Grok-Subagenten-Prozesse darunter.",
   "group.closeAll": "Alle Grok dieses Codex schließen",
   "group.closeAllAria":
     "Alle Grok-Subagenten unter Supervisor {owner} schließen",
@@ -122,19 +120,10 @@ export default {
   "session.meta.autoClose": "Auto-Bereinigungs-Countdown",
   "session.meta.hook": "Letzter Hook",
   "session.meta.tool": "Aktuelles Werkzeug",
-  "session.lifecycle.connectedTitle": "Keep-alive aktiv",
-  "session.lifecycle.connectedBody":
-    "Die WebUI erneuert den Codex-Lease; diese Sitzung wird bei Verbindung nicht automatisch geschlossen.",
   "session.lifecycle.disconnectedTitle":
     "Supervisor offline — noch kein Schließen",
   "session.lifecycle.disconnectedBody":
     "Running- oder Waiting-Phasen werden nie automatisch geschlossen. Die Karenz beginnt erst nach sicherem Idle oder Endzustand.",
-  "session.lifecycle.policyLeaseGrace":
-    "Nach Trennung: Lease {lease}, dann Karenz {grace} ab Idle/Endzustand.",
-  "session.lifecycle.policyLease":
-    "Nach Trennung: Lease {lease}, bevor Idle/Endzustand in die Karenz eintreten kann.",
-  "session.lifecycle.policyGrace":
-    "Nach Trennung: Karenz {grace} ab Idle/Endzustand.",
   "session.lifecycle.orphanedTitle": "Auto-Schließen-Countdown",
   "session.lifecycle.orphanedCountdown":
     "Bereinigungsberechtigt in {remaining}",

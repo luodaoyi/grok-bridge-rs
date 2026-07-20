@@ -1,5 +1,5 @@
 /** Default viewport height for each terminal panel (px). */
-export const TERMINAL_HEIGHT_DEFAULT = 280;
+export const TERMINAL_HEIGHT_DEFAULT = 560;
 /** Smallest useful interactive height (px). */
 export const TERMINAL_HEIGHT_MIN = 120;
 /** Hard ceiling so one panel cannot dominate the page (px). */
@@ -7,10 +7,14 @@ export const TERMINAL_HEIGHT_MAX = 720;
 /** Soft ceiling relative to the browser viewport. */
 export const TERMINAL_HEIGHT_MAX_VH = 0.7;
 
-export const TERMINAL_HEIGHT_STORAGE_PREFIX = "grok-bridge-terminal-height:";
+/** Group-scoped height (one value per Codex supervisor group). */
+export const TERMINAL_HEIGHT_STORAGE_PREFIX = "grok-bridge-group-terminal-height:";
 
-export function terminalHeightStorageKey(sessionId) {
-  return `${TERMINAL_HEIGHT_STORAGE_PREFIX}${sessionId}`;
+/** In-tab listeners so every terminal in a group shares height immediately. */
+const heightListeners = new Map();
+
+export function terminalHeightStorageKey(groupKey) {
+  return `${TERMINAL_HEIGHT_STORAGE_PREFIX}${groupKey}`;
 }
 
 export function maxTerminalHeight(viewportHeight = getViewportHeight()) {
@@ -31,14 +35,14 @@ export function clampTerminalHeight(
   return Math.min(max, Math.max(TERMINAL_HEIGHT_MIN, value));
 }
 
-export function readTerminalHeight(sessionId, storage) {
-  if (!sessionId) return clampTerminalHeight(TERMINAL_HEIGHT_DEFAULT);
+export function readTerminalHeight(groupKey, storage) {
+  if (!groupKey) return clampTerminalHeight(TERMINAL_HEIGHT_DEFAULT);
   try {
     const store =
       storage ??
       (typeof window !== "undefined" ? window.localStorage : null);
     if (!store) return clampTerminalHeight(TERMINAL_HEIGHT_DEFAULT);
-    const raw = store.getItem(terminalHeightStorageKey(sessionId));
+    const raw = store.getItem(terminalHeightStorageKey(groupKey));
     if (raw == null) return clampTerminalHeight(TERMINAL_HEIGHT_DEFAULT);
     return clampTerminalHeight(Number(raw));
   } catch {
@@ -46,17 +50,50 @@ export function readTerminalHeight(sessionId, storage) {
   }
 }
 
-export function writeTerminalHeight(sessionId, height, storage) {
-  if (!sessionId) return;
+export function writeTerminalHeight(groupKey, height, storage) {
+  if (!groupKey) return clampTerminalHeight(height);
   const next = clampTerminalHeight(height);
   try {
     const store =
       storage ??
       (typeof window !== "undefined" ? window.localStorage : null);
-    if (!store) return;
-    store.setItem(terminalHeightStorageKey(sessionId), String(next));
+    if (store) {
+      store.setItem(terminalHeightStorageKey(groupKey), String(next));
+    }
   } catch {
     // ignore private mode
+  }
+  notifyTerminalHeight(groupKey, next);
+  return next;
+}
+
+/**
+ * Subscribe to in-tab height changes for a supervisor group.
+ * Returns an unsubscribe function.
+ */
+export function subscribeTerminalHeight(groupKey, listener) {
+  if (!groupKey || typeof listener !== "function") {
+    return () => {};
+  }
+  let set = heightListeners.get(groupKey);
+  if (!set) {
+    set = new Set();
+    heightListeners.set(groupKey, set);
+  }
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0) {
+      heightListeners.delete(groupKey);
+    }
+  };
+}
+
+function notifyTerminalHeight(groupKey, height) {
+  const set = heightListeners.get(groupKey);
+  if (!set) return;
+  for (const listener of set) {
+    listener(height);
   }
 }
 

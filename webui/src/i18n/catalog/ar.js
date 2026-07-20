@@ -94,8 +94,6 @@ export default {
   "group.supervisor": "المشرف · Codex",
   "group.unowned": "محادثة Codex بلا تسمية",
   "group.subagentCount": "{n} وكلاء فرعيون",
-  "group.closeHint":
-    "إغلاق المشرف يُنهي جميع عمليات وكلاء Grok الفرعية التابعة له.",
   "group.closeAll": "إغلاق كل Grok لهذا Codex",
   "group.closeAllAria":
     "إغلاق جميع وكلاء Grok الفرعية تحت المشرف {owner}",
@@ -122,18 +120,9 @@ export default {
   "session.meta.cwd": "دليل العمل",
   "session.terminalAria": "طرفية الوكيل الفرعي {title}",
 
-  "session.lifecycle.connectedTitle": "الإبقاء على الاتصال نشط",
-  "session.lifecycle.connectedBody":
-    "يجدد WebUI إيجار Codex؛ لن تُغلق هذه الجلسة تلقائيًا أثناء الاتصال.",
   "session.lifecycle.disconnectedTitle": "المشرف غير متصل — الإغلاق لم يبدأ بعد",
   "session.lifecycle.disconnectedBody":
     "مراحل Running أو Waiting لا تُغلق تلقائيًا أبدًا. تبدأ فترة السماح فقط بعد مرحلة Idle آمنة أو مرحلة نهائية.",
-  "session.lifecycle.policyLeaseGrace":
-    "بعد الانقطاع: إيجار {lease}، ثم سماح {grace} بعد Idle/المرحلة النهائية.",
-  "session.lifecycle.policyLease":
-    "بعد الانقطاع: إيجار {lease} قبل أن تدخل Idle/المرحلة النهائية في السماح.",
-  "session.lifecycle.policyGrace":
-    "بعد الانقطاع: سماح {grace} بعد Idle/المرحلة النهائية.",
   "session.lifecycle.orphanedTitle": "عدّاد الإغلاق التلقائي",
   "session.lifecycle.orphanedCountdown": "مؤهل للتنظيف خلال {remaining}",
   "session.lifecycle.orphanedCountdownDue":
