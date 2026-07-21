@@ -1718,28 +1718,36 @@ mod tests {
     }
 
     fn serve_web_request(request: &[u8]) -> Vec<u8> {
+        let timeout = Duration::from_secs(10);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (server, _) = listener.accept().unwrap();
+        client.set_read_timeout(Some(timeout)).unwrap();
+        client.set_write_timeout(Some(timeout)).unwrap();
+        server.set_read_timeout(Some(timeout)).unwrap();
+        server.set_write_timeout(Some(timeout)).unwrap();
         client.write_all(request).unwrap();
         client.shutdown(std::net::Shutdown::Write).unwrap();
 
-        handle_web_connection(
-            server,
-            Arc::new(RuntimeState {
-                host: SessionHost::new(OrphanPolicy {
-                    lease_ms: 120_000,
-                    grace_ms: 600_000,
+        let handler = std::thread::spawn(move || {
+            handle_web_connection(
+                server,
+                Arc::new(RuntimeState {
+                    host: SessionHost::new(OrphanPolicy {
+                        lease_ms: 120_000,
+                        grace_ms: 600_000,
+                    }),
+                    started_at_ms: 0,
+                    stopping: AtomicBool::new(false),
+                    web_url: None,
+                    version_checker: Arc::new(VersionChecker::new()),
                 }),
-                started_at_ms: 0,
-                stopping: AtomicBool::new(false),
-                web_url: None,
-                version_checker: Arc::new(VersionChecker::new()),
-            }),
-        );
+            );
+        });
 
         let mut response = Vec::new();
         client.read_to_end(&mut response).unwrap();
+        handler.join().unwrap();
         response
     }
 
