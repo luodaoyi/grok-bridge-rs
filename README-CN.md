@@ -123,9 +123,10 @@ WebUI 是查看和管理会话的面板，不会替代编辑器或 Git 工作流
 
 ## 故障排查
 
-如果 `create` 报告 Grok 状态目录不可写，说明单例 Runtime 继承了文件系统沙箱，Grok 无法创建会话数据。先执行 `list`，避免中断无关会话；确认后，从可写入 `GROK_HOME` 或默认 `~/.grok` 的用户环境启动 Runtime：
+如果 `create` 报告 Grok 状态目录不可写，说明单例 Runtime 继承了文件系统沙箱，Grok 无法创建会话数据。先执行 `list`，避免中断无关会话；确认可以中断受影响的单例后，先停止它，再从可写入 `GROK_HOME` 或默认 `~/.grok` 的用户环境启动 Runtime：
 
 ```sh
+grok-bridge server stop
 grok-bridge server start
 ```
 

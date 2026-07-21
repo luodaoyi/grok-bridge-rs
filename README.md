@@ -133,9 +133,10 @@ The WebUI is an inspection and control surface, not a replacement for your edito
 
 ## Troubleshooting
 
-If `create` reports that the Grok state directory is not writable, the singleton Runtime inherited a filesystem sandbox that prevents Grok from creating session data. Check `list` before stopping anything, then start the Runtime from a user context that can write `GROK_HOME` or the default `~/.grok`:
+If `create` reports that the Grok state directory is not writable, the singleton Runtime inherited a filesystem sandbox that prevents Grok from creating session data. Check `list` before stopping anything. After confirming it is safe to interrupt the affected singleton, stop it and start the Runtime from a user context that can write `GROK_HOME` or the default `~/.grok`:
 
 ```sh
+grok-bridge server stop
 grok-bridge server start
 ```
 
