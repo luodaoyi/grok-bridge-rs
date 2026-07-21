@@ -10,6 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@tabler/core": "1.4.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "6.0.0",
     "lucide-react": "1.24.0",
@@ -17,10 +18,8 @@
     "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "4.3.2",
     "@vitejs/plugin-react": "6.0.3",
     "jsdom": "29.1.1",
-    "tailwindcss": "4.3.2",
     "vite": "8.1.4",
     "vitest": "4.1.10"
   }

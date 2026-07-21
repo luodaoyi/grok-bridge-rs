@@ -91,46 +91,46 @@ export function SupervisorGroup({
 
   return (
     <details
-      className="group overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--group-bg)] shadow-[var(--shadow-md)] open:border-[var(--open-border)] open:shadow-[var(--shadow-lg)]"
+      className="card supervisor-card group"
       data-owner-key={groupKey}
       open={!collapsed}
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >
-      <summary className="flex min-h-16 cursor-pointer list-none items-center gap-3 px-3 py-3 marker:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus)] sm:px-4">
+      <summary className="card-header supervisor-summary">
         <ChevronRight
           aria-hidden="true"
-          className="shrink-0 text-[var(--accent)] transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none"
+          className="supervisor-chevron"
           size={18}
         />
-        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--supervisor-icon-border)] bg-[var(--supervisor-icon-bg)] text-[var(--accent)]">
+        <span className="avatar avatar-md bg-cyan-lt text-cyan supervisor-icon">
           <Network aria-hidden="true" size={18} />
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-bold tracking-[0.14em] text-[var(--faint)] uppercase">
+        <div className="supervisor-copy">
+          <div className="supervisor-labels">
+            <span className="subheader">
               {t("group.supervisor")}
             </span>
             <LifecycleBadge clientState={lifecycleState} />
           </div>
           <h2
-            className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-[var(--strong)] sm:text-[15px]"
+            className="card-title supervisor-title"
             title={displayOwner}
           >
             {displayOwner}
           </h2>
-          <p className="mt-0.5 break-words text-[11px] text-[var(--subtle)]">
+          <p className="text-secondary supervisor-summary-text">
             {groupSummary(sessions, t, locale)}
             {clientSessionId
               ? ` · ${t("group.idPrefix", { id: clientSessionId })}`
               : ""}
           </p>
         </div>
-        <span className="shrink-0 rounded-full border border-[var(--pill-border)] bg-[var(--pill-bg)] px-2.5 py-1 text-[11px] font-bold break-words text-[var(--accent-text)]">
+        <span className="badge bg-azure-lt text-azure supervisor-count">
           {t("group.subagentCount", { n: formatNumber(sessions.length) })}
         </span>
         {owner == null && clientSessionId == null ? null : (
           <button
-            className={`${dangerButton} shrink-0 max-sm:min-h-10 whitespace-normal`}
+            className={`${dangerButton} supervisor-close`}
             type="button"
             disabled={busy}
             aria-label={t("group.closeAllAria", { owner: displayOwner })}
@@ -142,19 +142,19 @@ export function SupervisorGroup({
               onCloseGroup(owner, clientSessionId, sessions.length);
             }}
           >
-            <Trash2 aria-hidden="true" size={14} className="shrink-0" />
-            <span className="min-w-0 break-words">{t("group.closeAll")}</span>
+            <Trash2 aria-hidden="true" size={14} />
+            <span>{t("group.closeAll")}</span>
           </button>
         )}
       </summary>
       {/* Keep children mounted when collapsed so session terminals stay alive. */}
-      <div className="border-t border-[var(--group-body-border)] bg-[var(--group-body-bg)]">
+      <div className="supervisor-body">
         {sessions.length > 0 ? (
           <>
             <div
               role="tablist"
               aria-label={displayOwner}
-              className="flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--group-body-border)] px-3 py-2 sm:px-4"
+              className="nav nav-tabs flex-nowrap overflow-x-auto session-tabs"
             >
               {sessions.map((session, index) => {
                 const activity = activityOf(session);
@@ -178,24 +178,17 @@ export function SupervisorGroup({
                     aria-controls={panelId}
                     tabIndex={selected ? 0 : -1}
                     aria-label={`${ordinal} ${status} · ${sessionTitle(session)}`}
-                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-left text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] ${
-                      selected
-                        ? "border-[var(--accent)] bg-[var(--session-open-bg)] text-[var(--strong)]"
-                        : "border-[var(--border)] bg-[var(--session-bg)] text-[var(--subtle)] hover:border-[var(--open-border)]"
-                    }`}
+                    className={`nav-link session-tab ${selected ? "active" : ""}`}
                     onClick={() => selectSession(session.session)}
                     onKeyDown={(event) => onTabKeyDown(event, index)}
                   >
-                    <span
-                      aria-hidden="true"
-                      className="tabular-nums text-[11px] text-[var(--faint)]"
-                    >
+                    <span aria-hidden="true" className="session-ordinal">
                       {ordinal}
                     </span>
                     <ActivityBadge
                       activity={activity}
                       phase={session.phase}
-                      className="pointer-events-none"
+                      className="session-tab-badge"
                     />
                   </button>
                 );

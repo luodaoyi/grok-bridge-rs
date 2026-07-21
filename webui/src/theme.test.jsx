@@ -53,20 +53,25 @@ describe("theme", () => {
         </I18nProvider>,
       ),
     );
-    const dark = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent.includes("深色"),
-    );
+    const trigger = container.querySelector("[data-theme-trigger]");
+    expect(trigger).not.toBeNull();
+    expect(trigger.textContent.trim()).toBe("");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    const dark = container.querySelector('[data-theme-option="dark"]');
     await act(async () => dark.click());
     expect(localStorage.getItem(THEME_KEY)).toBe("dark");
     expect(document.documentElement.dataset.resolvedTheme).toBe("dark");
+    expect(document.documentElement.dataset.bsTheme).toBe("dark");
 
-    const auto = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent.includes("自动"),
-    );
+    await act(async () => trigger.click());
+    const auto = container.querySelector('[data-theme-option="auto"]');
     await act(async () => auto.click());
     expect(localStorage.getItem(THEME_KEY)).toBe("auto");
     await act(async () => query.setMatches(true));
     expect(document.documentElement.dataset.resolvedTheme).toBe("dark");
+    expect(document.documentElement.dataset.bsTheme).toBe("dark");
     expect(query.addEventListener).toHaveBeenCalledWith(
       "change",
       expect.any(Function),
@@ -76,5 +81,6 @@ describe("theme", () => {
   it("normalizes invalid preferences", () => {
     applyTheme("invalid", query);
     expect(document.documentElement.dataset.theme).toBe("auto");
+    expect(document.documentElement.dataset.bsTheme).toBe("light");
   });
 });

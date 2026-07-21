@@ -217,6 +217,11 @@ describe("App", () => {
     expect(container.querySelectorAll("details.group")).toHaveLength(2);
     expect(container.querySelectorAll("details.session")).toHaveLength(2);
     expect(container.querySelectorAll("[data-terminal]")).toHaveLength(2);
+    expect(container.querySelector(".page.app-shell")).not.toBeNull();
+    expect(container.querySelector("header.navbar")).not.toBeNull();
+    expect(container.querySelectorAll(".stats-grid > .card")).toHaveLength(5);
+    expect(container.querySelector("details.card.supervisor-card")).not.toBeNull();
+    expect(container.querySelector(".nav.nav-tabs")).not.toBeNull();
     expect(container.querySelector('[href="#session-board"]')).not.toBeNull();
     expect(container.querySelectorAll("button")).toSatisfy((buttons) =>
       [...buttons].some((button) =>

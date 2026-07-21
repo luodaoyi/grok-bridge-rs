@@ -1,4 +1,4 @@
-import { ChevronDown, Languages } from "lucide-react";
+import { Languages } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -138,15 +138,15 @@ export function LanguageSwitcher() {
   return (
     <div
       ref={rootRef}
-      className="lang-switcher relative inline-flex max-w-full"
+      className="lang-switcher dropdown"
       data-language-switcher="true"
       data-open={open ? "true" : "false"}
     >
       <button
         ref={buttonRef}
         type="button"
-        className="lang-switcher-trigger inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-lg border border-[var(--button-border)] bg-[var(--theme-control-bg)] px-2 py-1 text-[11px] font-semibold text-[var(--button-text)] shadow-[var(--shadow-sm)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]"
-        title={t("lang.label")}
+        className="btn btn-sm btn-icon btn-outline-secondary header-icon-button lang-switcher-trigger"
+        title={`${t("lang.label")}: ${currentLabel}`}
         aria-label={t("lang.aria")}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -160,18 +160,8 @@ export function LanguageSwitcher() {
       >
         <Languages
           aria-hidden="true"
-          size={14}
-          className="shrink-0 text-[var(--muted)]"
-        />
-        <span className="min-w-0 max-w-[7.5rem] truncate sm:max-w-[10rem]">
-          {currentLabel}
-        </span>
-        <ChevronDown
-          aria-hidden="true"
-          size={14}
-          className={`shrink-0 text-[var(--muted)] transition-transform duration-150 motion-reduce:transition-none ${
-            open ? "rotate-180" : ""
-          }`}
+          size={18}
+          className="text-secondary"
         />
       </button>
 
@@ -187,7 +177,7 @@ export function LanguageSwitcher() {
               ? `${listId}-opt-${locales[activeIndex]}`
               : undefined
           }
-          className="lang-menu absolute top-[calc(100%+0.35rem)] end-0 z-40 m-0 max-h-72 min-w-[11rem] max-w-[min(18rem,calc(100vw-1.25rem))] list-none overflow-y-auto overscroll-contain rounded-xl border p-1 shadow-[var(--shadow-md)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]"
+          className="dropdown-menu show lang-menu"
           data-language-menu="true"
           onKeyDown={onListKeyDown}
         >
@@ -205,15 +195,15 @@ export function LanguageSwitcher() {
                 data-language-option-index={index}
                 data-active={active ? "true" : "false"}
                 data-selected={selected ? "true" : "false"}
-                className={`lang-menu-option flex cursor-pointer items-center rounded-lg px-2.5 py-2 text-start text-[12px] font-semibold break-words ${
+                className={`dropdown-item lang-menu-option ${
                   selected ? "lang-menu-option-selected" : ""
                 } ${active ? "lang-menu-option-active" : ""}`}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => selectLocale(code)}
               >
-                <span className="min-w-0 flex-1 break-words">{label}</span>
+                <span className="lang-menu-label">{label}</span>
                 {selected ? (
-                  <span className="lang-menu-check ms-2 shrink-0 text-[10px]" aria-hidden="true">
+                  <span className="lang-menu-check" aria-hidden="true">
                     ✓
                   </span>
                 ) : null}

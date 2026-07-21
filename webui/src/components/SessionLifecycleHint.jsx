@@ -6,17 +6,17 @@ import { countdownLabel, lifecycleHintModel } from "../sessions.js";
  * Visually stronger than connected (no banner), weaker than risk cards.
  */
 const COMPACT_DISCONNECTED =
-  "my-1 rounded border-l-2 border-[var(--disconnected-text)] bg-[var(--disconnected-bg)] px-2 py-0.5 text-[11px] leading-snug text-[var(--disconnected-text)]";
+  "alert alert-warning lifecycle-hint lifecycle-hint-compact";
 
 /** Prominent risk card for orphaned / closing cleanup paths. */
 const PROMINENT =
-  "my-2 rounded-lg border-l-[3px] px-3 py-2 text-xs leading-5 font-medium";
+  "alert lifecycle-hint lifecycle-hint-prominent";
 
 const PROMINENT_TONE = {
   orphaned:
-    "border-[var(--cleanup-text)] bg-[var(--cleanup-bg)] text-[var(--cleanup-text)]",
+    "alert-danger",
   closing:
-    "border-[var(--cleanup-text)] bg-[var(--cleanup-bg)] text-[var(--cleanup-text)]",
+    "alert-danger",
 };
 
 /**
@@ -40,10 +40,10 @@ export function SessionLifecycleHint({ session, now = Date.now() }) {
         data-density="compact"
         role="status"
       >
-        <span className="font-semibold tracking-tight">
+        <span className="fw-semibold">
           {t("session.lifecycle.disconnectedTitle")}
         </span>
-        <span className="opacity-95">
+        <span>
           {" — "}
           {t("session.lifecycle.disconnectedBody")}
         </span>
@@ -60,10 +60,10 @@ export function SessionLifecycleHint({ session, now = Date.now() }) {
           data-density="prominent"
           role="alert"
         >
-          <p className="font-bold tracking-tight">
+          <p className="fw-bold mb-1">
             {t("session.lifecycle.orphanedTitle")}
           </p>
-          <p className="mt-0.5">{t("session.lifecycle.orphanedNoDeadline")}</p>
+          <p className="mb-0">{t("session.lifecycle.orphanedNoDeadline")}</p>
         </div>
       );
     }
@@ -79,15 +79,15 @@ export function SessionLifecycleHint({ session, now = Date.now() }) {
         data-cleanup-due={due ? "true" : "false"}
         role="alert"
       >
-        <p className="font-bold tracking-tight">
+        <p className="fw-bold mb-1">
           {t("session.lifecycle.orphanedTitle")}
         </p>
-        <p className="mt-0.5 tabular-nums" data-lifecycle-countdown>
+        <p className="mb-1 tabular-nums" data-lifecycle-countdown>
           {due
             ? t("session.lifecycle.orphanedCountdownDue")
             : t("session.lifecycle.orphanedCountdown", { remaining })}
         </p>
-        <p className="mt-0.5 tabular-nums opacity-95">
+        <p className="mb-0 tabular-nums">
           {t("session.lifecycle.orphanedAt", { at })}
         </p>
       </div>
@@ -102,10 +102,10 @@ export function SessionLifecycleHint({ session, now = Date.now() }) {
         data-density="prominent"
         role="status"
       >
-        <p className="font-bold tracking-tight">
+        <p className="fw-bold mb-1">
           {t("session.lifecycle.closingTitle")}
         </p>
-        <p className="mt-0.5">{t("session.lifecycle.closingBody")}</p>
+        <p className="mb-0">{t("session.lifecycle.closingBody")}</p>
       </div>
     );
   }

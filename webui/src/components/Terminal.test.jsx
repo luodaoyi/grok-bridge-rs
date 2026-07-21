@@ -18,6 +18,7 @@ import {
   maxTerminalHeight,
   terminalHeightStorageKey,
 } from "../utils/terminalHeight.js";
+import { TERMINAL_FONT_FAMILY } from "../utils/terminalTheme.js";
 import { createTerminalWriteQueue, fitTerminalHost } from "./Terminal.jsx";
 
 vi.mock("@xterm/xterm", () => ({
@@ -219,6 +220,10 @@ describe("Terminal (xterm read-only)", () => {
     const term = MockXTerm.instances[0];
     expect(term.options.disableStdin).toBe(true);
     expect(term.options.cursorBlink).toBe(false);
+    expect(term.options.fontFamily).toBe(TERMINAL_FONT_FAMILY);
+    expect(
+      container.querySelector("[data-terminal-host]").style.fontFamily,
+    ).toBe(TERMINAL_FONT_FAMILY);
     expect(term.handlers.data).toHaveLength(0);
     expect(term.handlers.key).toHaveLength(0);
     expect(term.opened).toBe(true);

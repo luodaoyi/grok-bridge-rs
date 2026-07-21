@@ -34,32 +34,32 @@ export function SubagentCard({
 
   return (
     <details
-      className="session group/session min-w-0 border-t border-[var(--border)] bg-[var(--session-bg)] first:border-t-0 open:bg-[var(--session-open-bg)]"
+      className="session subagent-card"
       data-session={session.session}
       open={!collapsed}
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >
-      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2.5 px-3 py-3 marker:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus)] sm:px-4">
+      <summary className="subagent-summary">
         <ChevronRight
           aria-hidden="true"
-          className="shrink-0 text-[var(--accent)] transition-transform duration-150 group-open/session:rotate-90 motion-reduce:transition-none"
+          className="subagent-chevron"
           size={16}
         />
-        <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--subagent-icon-bg)] text-[var(--accent)] sm:inline-flex">
+        <span className="avatar avatar-sm bg-teal-lt text-teal subagent-icon">
           <Bot aria-hidden="true" size={15} />
         </span>
         <ActivityBadge activity={activity} phase={session.phase} />
         <LifecycleBadge
           clientState={session.client_state}
-          className={riskStates ? "" : "max-sm:hidden"}
+          className={riskStates ? "" : "lifecycle-secondary"}
         />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="text-[10px] font-bold tracking-[0.12em] text-[var(--faint)] uppercase">
+        <div className="subagent-copy">
+          <div className="subagent-title-row">
+            <span className="subheader">
               {t("session.subagent")}
             </span>
             <h3
-              className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-[var(--text)]"
+              className="subagent-title"
               title={title}
             >
               {title}
@@ -67,11 +67,7 @@ export function SubagentCard({
           </div>
           {collapsed ? (
             <p
-              className={`mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] ${
-                riskStates
-                  ? "font-semibold text-[var(--cleanup-text)]"
-                  : "text-[var(--subtle)]"
-              }`}
+              className={`subagent-collapsed text-secondary ${riskStates ? "text-danger fw-semibold" : ""}`}
               data-lifecycle-collapsed={riskStates ? hint.kind : undefined}
             >
               {riskSummary ? `${riskSummary} · ` : ""}
@@ -84,7 +80,7 @@ export function SubagentCard({
           ) : null}
         </div>
         <button
-          className={`${dangerButton} shrink-0 max-sm:min-h-10 whitespace-normal`}
+          className={`${dangerButton} subagent-close`}
           type="button"
           disabled={busy}
           aria-label={t("session.closeAria", { id: session.session })}
@@ -94,14 +90,14 @@ export function SubagentCard({
             onClose(session.session);
           }}
         >
-          <CircleStop aria-hidden="true" size={14} className="shrink-0" />
-          <span className="break-words">{t("session.close")}</span>
+          <CircleStop aria-hidden="true" size={14} />
+          <span>{t("session.close")}</span>
         </button>
       </summary>
       {/* Always keep body mounted so xterm survives collapse without losing stream. */}
-      <div className="px-3 pb-4 sm:px-4">
+      <div className="subagent-body">
         <SessionLifecycleHint session={session} now={now} />
-        <div className="my-1 flex min-w-0 flex-wrap items-start gap-x-5 gap-y-2.5 rounded-xl border border-[var(--meta-border)] bg-[var(--meta-bg)] px-3 py-3">
+        <div className="meta-grid">
           <MetaField label={t("session.meta.id")} title={session.session}>
             {session.session}
           </MetaField>
@@ -131,11 +127,11 @@ export function SubagentCard({
           </MetaField>
         </div>
         {session.waiting_reason ? (
-          <p className="my-3 rounded-r-lg border-l-[3px] border-[var(--waiting-note-border)] bg-[var(--waiting-note-bg)] px-3 py-2.5 text-xs leading-5 break-words text-[var(--waiting-text)]">
+          <p className="alert alert-warning waiting-note">
             {t("session.waitingNote", { reason: session.waiting_reason })}
           </p>
         ) : (
-          <div className="h-3" />
+          <div className="terminal-spacer" />
         )}
         <Terminal
           id={session.session}

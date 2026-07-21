@@ -456,20 +456,20 @@ export function Terminal({ id, heightKey, rows, cols, label }) {
   return (
     <div
       ref={shellRef}
-      className="terminal-shell relative flex w-full min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--terminal-border)] bg-[var(--terminal-bg)] shadow-[inset_0_1px_0_var(--terminal-inset)] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--focus)]"
+      className="terminal-shell"
       data-terminal={id}
       data-readonly={interactive ? "false" : "true"}
       data-interactive={interactive ? "on" : "off"}
       data-terminal-height={height}
     >
       <div
-        className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b border-[var(--terminal-border)] px-3 py-1.5"
+        className="terminal-header"
         data-terminal-header="true"
       >
-        <span className="min-w-0 text-[10px] font-bold tracking-[0.14em] break-words text-[var(--faint)] uppercase">
+        <span className="subheader terminal-label">
           {headerLabel}
         </span>
-        <span className="shrink-0 text-[10px] tabular-nums text-[var(--subtle)]">
+        <span className="terminal-grid-label text-secondary">
           {ptyLabel}
           {connectionState !== "connected" && interactive
             ? ` · ${t("interactive.unavailableShort")}`
@@ -478,8 +478,9 @@ export function Terminal({ id, heightKey, rows, cols, label }) {
       </div>
       <div
         ref={hostRef}
-        className="terminal-xterm w-full min-h-0 shrink-0 overflow-hidden px-2 py-2"
+        className="terminal-xterm"
         style={{
+          fontFamily: TERMINAL_FONT_FAMILY,
           height: `${height}px`,
           minHeight: `${TERMINAL_HEIGHT_MIN}px`,
           maxHeight: `${maxHeight}px`,
@@ -491,7 +492,7 @@ export function Terminal({ id, heightKey, rows, cols, label }) {
         data-terminal-host="true"
       />
       <div
-        className="terminal-resize-handle group flex shrink-0 cursor-ns-resize touch-none select-none items-center justify-center border-t border-[var(--terminal-border)] bg-[var(--session-bg)] py-1"
+        className="terminal-resize-handle"
         role="separator"
         aria-orientation="horizontal"
         aria-label={t("terminal.resizeAria")}
@@ -506,10 +507,10 @@ export function Terminal({ id, heightKey, rows, cols, label }) {
         onKeyDown={onResizeKeyDown}
       >
         <span
-          className="h-1 w-10 rounded-full bg-[var(--faint)] opacity-70 group-hover:opacity-100 group-focus-visible:opacity-100"
+          className="terminal-resize-grip"
           aria-hidden="true"
         />
-        <span className="sr-only">{t("terminal.resizeHint")}</span>
+        <span className="visually-hidden">{t("terminal.resizeHint")}</span>
       </div>
     </div>
   );

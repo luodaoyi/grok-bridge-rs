@@ -25,6 +25,7 @@ export function applyTheme(preference, mediaQuery) {
   const root = document.documentElement;
   root.dataset.theme = safePreference;
   root.dataset.resolvedTheme = resolved;
+  root.dataset.bsTheme = resolved;
   root.style.colorScheme = resolved;
   const colorScheme = document.querySelector('meta[name="color-scheme"]');
   if (colorScheme) colorScheme.content = resolved;

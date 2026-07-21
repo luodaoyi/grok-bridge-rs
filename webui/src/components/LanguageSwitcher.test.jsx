@@ -118,7 +118,8 @@ describe("LanguageSwitcher", () => {
     expect(button).not.toBeNull();
     expect(button.getAttribute("aria-haspopup")).toBe("listbox");
     expect(button.getAttribute("aria-expanded")).toBe("false");
-    expect(button.textContent).toContain(LOCALE_LABELS["zh-CN"]);
+    expect(button.textContent.trim()).toBe("");
+    expect(button.getAttribute("title")).toContain(LOCALE_LABELS["zh-CN"]);
 
     await act(async () => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
@@ -146,7 +147,7 @@ describe("LanguageSwitcher", () => {
     expect(menu()?.classList.contains("lang-menu")).toBe(true);
     expect(container.querySelector(".lang-menu-option")).not.toBeNull();
     expect(container.querySelector(".lang-menu-option-selected")).not.toBeNull();
-    expect(indexCss).toContain(".lang-menu {");
+    expect(indexCss).toMatch(/\.lang-menu,\s*\.theme-menu\s*\{/);
     expect(indexCss).toContain(".lang-menu-option-selected");
     expect(indexCss).toContain(".lang-menu-option-active");
 
@@ -240,7 +241,7 @@ describe("LanguageSwitcher", () => {
     expect(document.documentElement.dir).toBe("ltr");
     expect(menu()).toBeNull();
     expect(button.getAttribute("aria-expanded")).toBe("false");
-    expect(button.textContent).toContain(LOCALE_LABELS["zh-TW"]);
+    expect(button.getAttribute("title")).toContain(LOCALE_LABELS["zh-TW"]);
 
     await act(async () => {
       button.dispatchEvent(
@@ -279,7 +280,7 @@ describe("LanguageSwitcher", () => {
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("ja");
     expect(document.documentElement.lang).toBe("ja");
     expect(document.documentElement.dir).toBe("ltr");
-    expect(trigger().textContent).toContain(LOCALE_LABELS.ja);
+    expect(trigger().getAttribute("title")).toContain(LOCALE_LABELS.ja);
     expect(menu()).toBeNull();
   });
 
@@ -301,7 +302,7 @@ describe("LanguageSwitcher", () => {
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("ar");
     expect(document.documentElement.lang).toBe("ar");
     expect(document.documentElement.dir).toBe("rtl");
-    expect(trigger().textContent).toContain(LOCALE_LABELS.ar);
+    expect(trigger().getAttribute("title")).toContain(LOCALE_LABELS.ar);
     expect(menu()).toBeNull();
 
     await act(async () => trigger().click());
@@ -310,6 +311,6 @@ describe("LanguageSwitcher", () => {
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("en");
     expect(document.documentElement.lang).toBe("en");
     expect(document.documentElement.dir).toBe("ltr");
-    expect(trigger().textContent).toContain(LOCALE_LABELS.en);
+    expect(trigger().getAttribute("title")).toContain(LOCALE_LABELS.en);
   });
 });
