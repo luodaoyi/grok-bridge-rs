@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Detached Unix Runtime startup now creates a new process session so `server start` and automatic startup survive the invoking CLI process exiting.
+- Session creation now verifies that the effective Grok state directory (`GROK_HOME` or the platform home default) is writable before opening a PTY, returning actionable sandbox guidance instead of leaving Grok indefinitely at `Starting session...`.
+
 ## 0.8.1 - 2026-07-20
 
 - Moved the WebUI “close all Grok for this Codex” control into the supervisor group header so it no longer occupies a standalone body row, without toggling the details group when clicked.

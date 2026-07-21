@@ -131,6 +131,16 @@ The WebUI is an inspection and control surface, not a replacement for your edito
 - Do not put passwords, tokens, or other secrets in prompts, session titles, or environment variables shown in the panel.
 - Download releases from a trusted source and verify the provided SHA-256 file.
 
+## Troubleshooting
+
+If `create` reports that the Grok state directory is not writable, the singleton Runtime inherited a filesystem sandbox that prevents Grok from creating session data. Check `list` before stopping anything, then start the Runtime from a user context that can write `GROK_HOME` or the default `~/.grok`:
+
+```sh
+grok-bridge server start
+```
+
+Unix Runtime startup creates a separate process session, so the Server remains available after this command exits. Retry `create` after `server status` confirms that the singleton is running.
+
 ## Project Links
 
 - [Source code](https://github.com/luodaoyi/grok-bridge-rs)

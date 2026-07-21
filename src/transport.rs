@@ -9,6 +9,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use interprocess::local_socket::{GenericNamespaced, Name, Stream, prelude::*};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 #[cfg(not(windows))]
@@ -195,7 +197,30 @@ fn start_detached_server() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn start_detached_server() -> Result<()> {
+    let executable = env::current_exe().context("failed to locate grok-bridge executable")?;
+    let mut command = Command::new(executable);
+    command
+        .arg("__server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and the callback does not access shared state.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    command.spawn().context("failed to spawn runtime server")?;
+    Ok(())
+}
+
+#[cfg(not(any(windows, unix)))]
 fn start_detached_server() -> Result<()> {
     let executable = env::current_exe().context("failed to locate grok-bridge executable")?;
     Command::new(executable)

@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     env,
     ffi::OsString,
+    fs::{self, OpenOptions},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::{
@@ -895,6 +896,7 @@ impl Session {
         config: LaunchConfig,
         host_revision: Arc<HostRevision>,
     ) -> Result<Arc<Self>> {
+        ensure_grok_state_dir_writable(provider_session_id)?;
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -2318,6 +2320,78 @@ fn ensure_allowed_root(cwd: &Path) -> Result<()> {
     }
 }
 
+fn ensure_grok_state_dir_writable(provider_session_id: &str) -> Result<()> {
+    let Some(state_dir) = grok_state_dir() else {
+        return Ok(());
+    };
+    ensure_grok_state_dir_writable_at(&state_dir, provider_session_id)
+}
+
+fn grok_state_dir() -> Option<PathBuf> {
+    grok_state_dir_from(
+        env::var_os("GROK_HOME"),
+        env::var_os("HOME"),
+        env::var_os("USERPROFILE"),
+        cfg!(windows),
+    )
+}
+
+fn grok_state_dir_from(
+    grok_home: Option<OsString>,
+    home: Option<OsString>,
+    user_profile: Option<OsString>,
+    windows: bool,
+) -> Option<PathBuf> {
+    non_empty_path(grok_home).or_else(|| {
+        let home = if windows {
+            non_empty_path(user_profile).or_else(|| non_empty_path(home))
+        } else {
+            non_empty_path(home).or_else(|| non_empty_path(user_profile))
+        }?;
+        Some(home.join(".grok"))
+    })
+}
+
+fn non_empty_path(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
+fn ensure_grok_state_dir_writable_at(state_dir: &Path, provider_session_id: &str) -> Result<()> {
+    let context = format!(
+        "Grok state directory is not writable: {}. The Runtime may have inherited a filesystem sandbox; start grok-bridge server outside that sandbox and retry",
+        state_dir.display()
+    );
+    fs::create_dir_all(state_dir).with_context(|| context.clone())?;
+    let probe_path = state_dir.join(format!(".grok-bridge-write-probe-{provider_session_id}"));
+    let mut created = false;
+    let probe_result = (|| -> std::io::Result<()> {
+        let mut probe = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe_path)?;
+        created = true;
+        probe.write_all(b"grok-bridge")?;
+        probe.flush()
+    })();
+    let cleanup_result = if created {
+        match fs::remove_file(&probe_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(())
+    };
+    probe_result.with_context(|| context.clone())?;
+    cleanup_result.with_context(|| {
+        format!(
+            "failed to remove Grok state probe: {}",
+            probe_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 #[cfg(windows)]
 fn normalize_platform_path(path: PathBuf) -> PathBuf {
     let display = path.to_string_lossy();
@@ -2388,6 +2462,14 @@ mod tests {
     use super::*;
 
     const TEST_PROVIDER_SESSION_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    fn temporary_test_directory(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "grok-bridge-{label}-{}-{}",
+            std::process::id(),
+            generate_provider_session_id().unwrap()
+        ))
+    }
 
     fn hook_event(kind: HookEventKind) -> HookEvent {
         HookEvent {
@@ -2476,6 +2558,84 @@ mod tests {
             },
             revision,
         }
+    }
+
+    #[test]
+    fn resolves_grok_state_directory_with_platform_precedence() {
+        assert_eq!(
+            grok_state_dir_from(
+                Some(OsString::from("/custom/grok")),
+                Some(OsString::from("/home/test")),
+                Some(OsString::from(r"C:\Users\test")),
+                false,
+            ),
+            Some(PathBuf::from("/custom/grok"))
+        );
+        assert_eq!(
+            grok_state_dir_from(
+                None,
+                Some(OsString::from("/home/test")),
+                Some(OsString::from(r"C:\Users\test")),
+                false,
+            ),
+            Some(PathBuf::from("/home/test").join(".grok"))
+        );
+        assert_eq!(
+            grok_state_dir_from(
+                None,
+                Some(OsString::from("/home/test")),
+                Some(OsString::from(r"C:\Users\test")),
+                true,
+            ),
+            Some(PathBuf::from(r"C:\Users\test").join(".grok"))
+        );
+        assert_eq!(
+            grok_state_dir_from(Some(OsString::new()), None, None, false),
+            None
+        );
+    }
+
+    #[test]
+    fn probes_writable_grok_state_directory_and_removes_probe() {
+        let root = temporary_test_directory("writable-state");
+        let state_dir = root.join("state");
+        ensure_grok_state_dir_writable_at(&state_dir, TEST_PROVIDER_SESSION_ID).unwrap();
+        assert!(state_dir.is_dir());
+        assert!(
+            !state_dir
+                .join(format!(
+                    ".grok-bridge-write-probe-{TEST_PROVIDER_SESSION_ID}"
+                ))
+                .exists()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_unwritable_grok_state_directory_with_sandbox_guidance() {
+        let root = temporary_test_directory("blocked-state");
+        fs::create_dir_all(&root).unwrap();
+        let state_dir = root.join("state-file");
+        fs::write(&state_dir, b"not a directory").unwrap();
+        let error = ensure_grok_state_dir_writable_at(&state_dir, TEST_PROVIDER_SESSION_ID)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Grok state directory is not writable"));
+        assert!(error.contains("filesystem sandbox"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn probe_collision_preserves_existing_file() {
+        let root = temporary_test_directory("probe-collision");
+        fs::create_dir_all(&root).unwrap();
+        let probe_path = root.join(format!(
+            ".grok-bridge-write-probe-{TEST_PROVIDER_SESSION_ID}"
+        ));
+        fs::write(&probe_path, b"existing").unwrap();
+        assert!(ensure_grok_state_dir_writable_at(&root, TEST_PROVIDER_SESSION_ID).is_err());
+        assert_eq!(fs::read(&probe_path).unwrap(), b"existing");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

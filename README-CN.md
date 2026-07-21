@@ -121,6 +121,16 @@ WebUI 是查看和管理会话的面板，不会替代编辑器或 Git 工作流
 - 不要把密码、Token 或其他秘密放入提示词、会话标题或会显示在面板中的环境变量。
 - 请从可信来源下载 Release，并使用提供的 SHA-256 文件校验完整性。
 
+## 故障排查
+
+如果 `create` 报告 Grok 状态目录不可写，说明单例 Runtime 继承了文件系统沙箱，Grok 无法创建会话数据。先执行 `list`，避免中断无关会话；确认后，从可写入 `GROK_HOME` 或默认 `~/.grok` 的用户环境启动 Runtime：
+
+```sh
+grok-bridge server start
+```
+
+Unix Runtime 会创建独立进程会话，因此命令退出后 Server 仍会运行。用 `server status` 确认单例已启动，再重试 `create`。
+
 ## 项目链接
 
 - [源代码](https://github.com/luodaoyi/grok-bridge-rs)
