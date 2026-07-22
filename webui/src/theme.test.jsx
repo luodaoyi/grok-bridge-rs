@@ -97,8 +97,26 @@ describe("theme", () => {
     expect(menu).not.toBeNull();
     expect(document.activeElement).toBe(menu);
 
+    trigger.focus();
     await act(async () => {
-      menu.dispatchEvent(
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(container.querySelector("[data-theme-menu]")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true }),
+      );
+    });
+    const reopenedMenu = container.querySelector("[data-theme-menu]");
+    expect(reopenedMenu).not.toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      reopenedMenu.dispatchEvent(
         new KeyboardEvent("keydown", { key: "End", bubbles: true }),
       );
     });
@@ -107,7 +125,7 @@ describe("theme", () => {
     ).toBe("true");
 
     await act(async () => {
-      menu.dispatchEvent(
+      reopenedMenu.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
       );
     });

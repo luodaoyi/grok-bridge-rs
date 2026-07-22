@@ -127,6 +127,7 @@ summary::-webkit-details-marker {
   position: relative;
   z-index: 1030;
   background: color-mix(in srgb, var(--gb-surface) 92%, transparent);
+  -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
 }
 

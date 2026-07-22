@@ -65,9 +65,15 @@ export function ThemeSwitcher() {
   };
 
   const onTriggerKeyDown = (event) => {
-    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+    if (event.key === "ArrowDown") {
       event.preventDefault();
       openMenu();
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (open) close(true);
+      else openMenu();
       return;
     }
     if (event.key === "Escape" && open) {
