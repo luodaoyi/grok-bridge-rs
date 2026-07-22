@@ -896,7 +896,7 @@ impl Session {
         config: LaunchConfig,
         host_revision: Arc<HostRevision>,
     ) -> Result<Arc<Self>> {
-        ensure_grok_state_dir_writable(provider_session_id)?;
+        let grok_state_dir = ensure_grok_state_dir_writable(&config.cwd, provider_session_id)?;
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -914,7 +914,7 @@ impl Session {
             .master
             .take_writer()
             .context("failed to take the PTY writer")?;
-        let command = build_grok_command(&config, provider_session_id);
+        let command = build_grok_command(&config, provider_session_id, grok_state_dir.as_deref());
         let child = pair
             .slave
             .spawn_command(command)
@@ -2068,11 +2068,18 @@ fn notification_effect(event: &HookEvent) -> HookEffect {
     }
 }
 
-fn build_grok_command(config: &LaunchConfig, provider_session_id: &str) -> CommandBuilder {
+fn build_grok_command(
+    config: &LaunchConfig,
+    provider_session_id: &str,
+    grok_state_dir: Option<&Path>,
+) -> CommandBuilder {
     let mut command = CommandBuilder::new(&config.grok_bin);
     command.cwd(config.cwd.as_os_str());
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    if let Some(grok_state_dir) = grok_state_dir {
+        command.env("GROK_HOME", grok_state_dir.as_os_str());
+    }
     command.arg("--session-id");
     command.arg(provider_session_id);
     if config.always_approve {
@@ -2320,20 +2327,33 @@ fn ensure_allowed_root(cwd: &Path) -> Result<()> {
     }
 }
 
-fn ensure_grok_state_dir_writable(provider_session_id: &str) -> Result<()> {
-    let Some(state_dir) = grok_state_dir() else {
-        return Ok(());
+fn ensure_grok_state_dir_writable(
+    cwd: &Path,
+    provider_session_id: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(state_dir) = grok_state_dir(cwd) else {
+        return Ok(None);
     };
-    ensure_grok_state_dir_writable_at(&state_dir, provider_session_id)
+    ensure_grok_state_dir_writable_at(&state_dir, provider_session_id)?;
+    Ok(Some(state_dir))
 }
 
-fn grok_state_dir() -> Option<PathBuf> {
-    grok_state_dir_from(
+fn grok_state_dir(cwd: &Path) -> Option<PathBuf> {
+    let state_dir = grok_state_dir_from(
         env::var_os("GROK_HOME"),
         env::var_os("HOME"),
         env::var_os("USERPROFILE"),
         cfg!(windows),
-    )
+    )?;
+    Some(resolve_state_dir_from_cwd(cwd, state_dir))
+}
+
+fn resolve_state_dir_from_cwd(cwd: &Path, state_dir: PathBuf) -> PathBuf {
+    if state_dir.is_absolute() {
+        state_dir
+    } else {
+        cwd.join(state_dir)
+    }
 }
 
 fn grok_state_dir_from(
@@ -2596,6 +2616,19 @@ mod tests {
     }
 
     #[test]
+    fn resolves_relative_grok_home_against_session_working_directory() {
+        let cwd = PathBuf::from("/workspace/project");
+        assert_eq!(
+            resolve_state_dir_from_cwd(&cwd, PathBuf::from(".grok-state")),
+            cwd.join(".grok-state")
+        );
+        assert_eq!(
+            resolve_state_dir_from_cwd(&cwd, PathBuf::from("/custom/grok")),
+            PathBuf::from("/custom/grok")
+        );
+    }
+
+    #[test]
     fn probes_writable_grok_state_directory_and_removes_probe() {
         let root = temporary_test_directory("writable-state");
         let state_dir = root.join("state");
@@ -2668,9 +2701,11 @@ mod tests {
                 grace_ms: 600_000,
             },
         };
-        let command = build_grok_command(&config, TEST_PROVIDER_SESSION_ID);
+        let grok_home = PathBuf::from(r"C:\repo\.grok-state");
+        let command = build_grok_command(&config, TEST_PROVIDER_SESSION_ID, Some(&grok_home));
         assert_eq!(command.get_env("GROK_BRIDGE_SESSION"), None);
         assert_eq!(command.get_env("GROK_BRIDGE_HOOK_TOKEN"), None);
+        assert_eq!(command.get_env("GROK_HOME"), Some(grok_home.as_os_str()));
         let argv = command
             .get_argv()
             .iter()
