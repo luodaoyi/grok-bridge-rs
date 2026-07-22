@@ -14,11 +14,7 @@ export function InteractiveToggle({
   return (
     <button
       type="button"
-      className={`${buttonBase} max-w-full whitespace-normal border px-2.5 py-1.5 text-left ${
-        interactive
-          ? "border-[var(--runtime-warn-border)] bg-[var(--runtime-warn-bg)] text-[var(--runtime-warn)]"
-          : "border-[var(--button-border)] bg-[var(--button-bg)] text-[var(--button-text)]"
-      }`}
+      className={`${buttonBase} ${interactive ? "btn-warning" : "btn-outline-secondary"}`}
       role="switch"
       aria-checked={interactive}
       aria-label={t("interactive.aria")}
@@ -33,8 +29,8 @@ export function InteractiveToggle({
       data-interactive={interactive ? "on" : "off"}
       onClick={() => onChange(!interactive)}
     >
-      <Icon aria-hidden="true" size={14} className="shrink-0" />
-      <span className="min-w-0 break-words">
+      <Icon aria-hidden="true" size={14} />
+      <span>
         {t("interactive.label")}:{" "}
         {interactive ? t("interactive.on") : t("interactive.off")}
       </span>

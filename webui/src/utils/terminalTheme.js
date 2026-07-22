@@ -41,5 +41,4 @@ export function readTerminalTheme() {
   };
 }
 
-export const TERMINAL_FONT_FAMILY =
-  'Consolas, "Cascadia Mono", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", monospace';
+export const TERMINAL_FONT_FAMILY = "var(--tblr-font-monospace)";

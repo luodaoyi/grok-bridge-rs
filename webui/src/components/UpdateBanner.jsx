@@ -7,22 +7,22 @@ export function UpdateBanner({ version, onDismiss }) {
   if (!version?.update_available || !version.latest) return null;
   return (
     <div
-      className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--notice-border)] bg-[var(--notice-bg)] px-3.5 py-3 text-xs text-[var(--notice-text)] shadow-[var(--shadow-sm)]"
+      className="alert alert-success update-banner"
       role="status"
       aria-live="polite"
       data-update-banner="true"
     >
-      <div className="min-w-0">
-        <strong className="block text-sm text-[var(--strong)]">
+      <div className="update-copy">
+        <strong className="d-block">
           {t("update.title", { version: version.latest })}
         </strong>
-        <p className="mt-0.5 break-words text-[var(--muted)]">
+        <p className="mb-0 text-secondary">
           {t("update.body", { current: version.current })}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="btn-list">
         <a
-          className={`${secondaryButton} no-underline`}
+          className={secondaryButton}
           href={version.release_url}
           target="_blank"
           rel="noreferrer"

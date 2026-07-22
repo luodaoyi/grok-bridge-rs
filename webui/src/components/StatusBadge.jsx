@@ -25,7 +25,7 @@ export function ActivityBadge({ activity, phase, className = "" }) {
   const { t } = useI18n();
   return (
     <span
-      className={`badge ${activityClass[activity] ?? activityClass.unknown} inline-flex max-w-full shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tracking-tight break-words ${className}`}
+      className={`badge ${activityClass[activity] ?? activityClass.unknown} ${className}`}
       title={phase ? t("badge.phase", { phase }) : undefined}
     >
       {activityLabel(activity, t)}
@@ -38,7 +38,7 @@ export function LifecycleBadge({ clientState, className = "" }) {
   const lifecycle = clientLifecycle(clientState);
   return (
     <span
-      className={`badge ${lifecycleClass[lifecycle] ?? lifecycleClass.unknown} inline-flex max-w-full shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-bold tracking-tight break-words ${className}`}
+      className={`badge ${lifecycleClass[lifecycle] ?? lifecycleClass.unknown} ${className}`}
       title={clientLifecycleLabel(clientState, t)}
     >
       {clientLifecycleLabel(clientState, t)}

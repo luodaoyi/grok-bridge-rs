@@ -18,28 +18,30 @@ export class AppErrorBoundary extends Component {
       const t = createTranslator(resolveLocale());
       return (
         <div
-          className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-4 py-16 text-center"
+          className="page page-center"
           role="alert"
         >
-          <p className="text-xs font-bold tracking-[0.16em] text-[var(--accent)]">
-            {t("error.brand")}
-          </p>
-          <h1 className="mt-2 text-lg font-bold text-[var(--strong)]">
-            {t("error.renderTitle")}
-          </h1>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            {String(this.state.error?.message || this.state.error)}
-          </p>
-          <button
-            className={`${secondaryButton} mt-5`}
-            type="button"
-            onClick={() => {
-              this.setState({ error: null });
-              window.location.reload();
-            }}
-          >
-            {t("error.reload")}
-          </button>
+          <div className="container-tight py-4">
+            <div className="card card-md">
+              <div className="card-body text-center">
+                <p className="subheader text-cyan">{t("error.brand")}</p>
+                <h1 className="h2">{t("error.renderTitle")}</h1>
+                <p className="text-secondary">
+                  {String(this.state.error?.message || this.state.error)}
+                </p>
+                <button
+                  className={secondaryButton}
+                  type="button"
+                  onClick={() => {
+                    this.setState({ error: null });
+                    window.location.reload();
+                  }}
+                >
+                  {t("error.reload")}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       );
     }

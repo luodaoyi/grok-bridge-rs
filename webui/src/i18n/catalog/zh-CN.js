@@ -13,7 +13,7 @@ export default {
   "app.githubTitle": "在 GitHub 打开 grok-bridge-rs",
   "app.github": "GitHub",
 
-  "connection.initial": "正在连接实时通道",
+  "connection.initial": "实时通道连接中",
   "connection.connected": "实时通道已连接",
   "connection.disconnected": "实时通道已断开",
   "connection.retrying": "实时通道重连中",
@@ -39,7 +39,7 @@ export default {
   "stats.waiting": "等待输入",
   "stats.done": "完成 / 空闲",
 
-  "stream.initial": "正在连接实时通道…",
+  "stream.initial": "实时通道连接中…",
   "stream.retrying": "实时通道重连中…",
   "stream.disconnected": "实时通道已断开，等待重连…",
   "stream.updated": "实时更新：{time}",
@@ -47,7 +47,7 @@ export default {
   "stream.pushMode": "推送：WebSocket · /api/events",
   "stream.error": "实时通道异常：{detail}（将自动重试）",
 
-  "connecting.title": "正在连接实时通道",
+  "connecting.title": "实时通道连接中",
   "connecting.body":
     "已建立到本机 Runtime 的 WebSocket 连接请求，首帧会话快照会立即渲染。",
 
