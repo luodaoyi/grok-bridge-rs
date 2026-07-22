@@ -1,0 +1,38 @@
+language: zh-CN
+
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  path_filters:
+    - "!target/**"
+    - "!webui/dist/**"
+    - "!**/node_modules/**"
+  path_instructions:
+    - path: "src/**/*.rs"
+      instructions: |
+        重点检查跨平台行为、Named Pipe/Unix socket 协议兼容、PTY 生命周期、并发锁顺序、资源清理、路径规范化、环境变量继承，以及 Windows、macOS 和 Linux 差异。
+        Runtime 或 Session 改动必须覆盖失败路径，不应让测试调用真实 Grok、消耗额度或修改外部仓库。
+    - path: "webui/src/**/*.{js,jsx}"
+      instructions: |
+        重点检查 WebSocket 事件顺序、终端输入默认只读、resize/input 权限边界、React effect 清理、13 种语言和 RTL 兼容、键盘可访问性及主题切换。
+        不要建议放宽同源校验，也不要在浏览器端暴露新的未授权写接口。
+    - path: ".github/workflows/**"
+      instructions: |
+        保持六平台原生构建矩阵，检查 GitHub Actions 权限最小化、lockfile 固定、Release 资产目录结构及 SHA-256 校验。
+    - path: "README*.md"
+      instructions: |
+        核对中英文操作步骤一致。涉及单例 Runtime 或现有会话的命令时，应先要求 list/status，并明确 stop、start 和验证顺序。
+
+chat:
+  auto_reply: true
