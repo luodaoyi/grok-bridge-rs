@@ -78,6 +78,43 @@ describe("theme", () => {
     );
   });
 
+  it("supports keyboard navigation and selection in the theme menu", async () => {
+    await act(async () =>
+      root.render(
+        <I18nProvider initialLocale="en">
+          <ThemeSwitcher />
+        </I18nProvider>,
+      ),
+    );
+    const trigger = container.querySelector("[data-theme-trigger]");
+    trigger.focus();
+    await act(async () => {
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    const menu = container.querySelector("[data-theme-menu]");
+    expect(menu).not.toBeNull();
+    expect(document.activeElement).toBe(menu);
+
+    await act(async () => {
+      menu.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+      );
+    });
+    expect(
+      container.querySelector('[data-theme-option="dark"]')?.dataset.active,
+    ).toBe("true");
+
+    await act(async () => {
+      menu.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(localStorage.getItem(THEME_KEY)).toBe("dark");
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("normalizes invalid preferences", () => {
     applyTheme("invalid", query);
     expect(document.documentElement.dataset.theme).toBe("auto");

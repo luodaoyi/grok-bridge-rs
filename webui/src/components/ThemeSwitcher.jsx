@@ -13,6 +13,7 @@ export function ThemeSwitcher() {
   const { theme, setTheme } = useTheme();
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
   const menuRef = useRef(null);
@@ -44,6 +45,20 @@ export function ThemeSwitcher() {
     };
   }, [close, open]);
 
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.focus({ preventScroll: true });
+  }, [activeIndex, open]);
+
+  const openMenu = () => {
+    const selected = Math.max(
+      0,
+      themeOptions.findIndex((option) => option.value === theme),
+    );
+    setActiveIndex(selected);
+    setOpen(true);
+  };
+
   const selectTheme = (value) => {
     setTheme(value);
     close(true);
@@ -52,7 +67,7 @@ export function ThemeSwitcher() {
   const onTriggerKeyDown = (event) => {
     if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      setOpen(true);
+      openMenu();
       return;
     }
     if (event.key === "Escape" && open) {
@@ -65,6 +80,32 @@ export function ThemeSwitcher() {
     if (event.key === "Escape") {
       event.preventDefault();
       close(true);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setActiveIndex(0);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      setActiveIndex(themeOptions.length - 1);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(index + 1, themeOptions.length - 1));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(index - 1, 0));
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      const option = themeOptions[activeIndex];
+      if (option) selectTheme(option.value);
       return;
     }
     if (event.key === "Tab") close(false);
@@ -88,7 +129,7 @@ export function ThemeSwitcher() {
         aria-controls={menuId}
         title={t("theme.title", { label: activeLabel })}
         data-theme-trigger="true"
-        onClick={() => (open ? close(true) : setOpen(true))}
+        onClick={() => (open ? close(true) : openMenu())}
         onKeyDown={onTriggerKeyDown}
       >
         <ActiveIcon aria-hidden="true" size={18} strokeWidth={2} />
@@ -99,22 +140,26 @@ export function ThemeSwitcher() {
           id={menuId}
           role="menu"
           tabIndex={-1}
+          aria-activedescendant={`${menuId}-option-${themeOptions[activeIndex]?.value}`}
           aria-label={t("theme.aria")}
           className="dropdown-menu show theme-menu"
           data-theme-menu="true"
           onKeyDown={onMenuKeyDown}
         >
-          {themeOptions.map(({ value, labelKey, Icon }) => {
+          {themeOptions.map(({ value, labelKey, Icon }, index) => {
             const active = theme === value;
             const label = t(labelKey);
             return (
               <button
                 key={value}
+                id={`${menuId}-option-${value}`}
                 type="button"
                 role="menuitemradio"
                 aria-checked={active}
                 className={`dropdown-item theme-menu-option ${active ? "theme-menu-option-selected" : ""}`}
                 data-theme-option={value}
+                data-active={index === activeIndex ? "true" : "false"}
+                onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => selectTheme(value)}
               >
                 <span className="theme-menu-label">
