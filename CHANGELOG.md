@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+## 0.8.2 - 2026-07-22
+
 - Detached Unix Runtime startup now creates a new process session so `server start` and automatic startup survive the invoking CLI process exiting.
-- Session creation now verifies that the effective Grok state directory (`GROK_HOME` or the platform home default) is writable before opening a PTY, returning actionable sandbox guidance instead of leaving Grok indefinitely at `Starting session...`.
+- Session creation now resolves relative `GROK_HOME` against the session working directory, passes the same absolute path to Grok, and verifies the effective state directory is writable before opening a PTY, returning actionable sandbox guidance instead of leaving Grok indefinitely at `Starting session...`.
+- Fixed the embedded-WebUI HTTP test helper to read and write concurrently with socket timeouts, preventing macOS Intel CI deadlocks on large static assets.
+- Rebuilt the session dashboard with Tabler and Bootstrap styling while preserving the live WebSocket terminal, 13-language catalog, RTL layout, read-only-by-default terminal input, responsive grouping, and light/dark/automatic themes.
+- Added complete keyboard navigation and focus restoration for theme selection, plus legacy Safari navbar blur compatibility.
+- Added repository-level CodeRabbit configuration for assertive Chinese reviews of pull requests targeting `main`, with Rust, WebUI, workflow, and bilingual documentation guidance alongside the existing six-platform GitHub Actions CI.
 
 ## 0.8.1 - 2026-07-20
 

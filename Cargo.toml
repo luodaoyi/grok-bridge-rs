@@ -1,6 +1,6 @@
 [package]
 name = "grok-bridge"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 description = "A local runtime server and CLI bridge for Grok Build"
 license = "MIT"
