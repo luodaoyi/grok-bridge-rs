@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.8.3 - 2026-07-23
+
+- Added Brazilian Portuguese and European Portuguese WebUI catalogs, locale detection, and localized page metadata.
+- Corrected Portuguese session lifecycle and update-banner wording following CodeRabbit review.
+
 ## 0.8.2 - 2026-07-22
 
 - Detached Unix Runtime startup now creates a new process session so `server start` and automatic startup survive the invoking CLI process exiting.
