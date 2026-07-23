@@ -14,7 +14,7 @@
 
 grok-build 让 Codex 可以稳定地在本机调用 Grok 完成真实的软件开发，不会为每次请求都留下难以管理的独立进程。它通过共享 Runtime 保持会话可见、可交互、按 Codex 对话归类，并能在浏览器中随时查看和关闭。
 
-WebUI 内置语言切换器，目前支持 13 种语言：English、简体中文、繁體中文、日本語、한국어、Русский、Español、Français、Deutsch、Bahasa Indonesia、ไทย、Tiếng Việt 和 العربية。首次访问时会跟随浏览器语言，选择的语言会保存在本地；阿拉伯语界面会使用从右到左（RTL）的布局。
+WebUI 内置语言切换器，目前支持 15 种语言：English、简体中文、繁體中文、日本語、한국어、Русский、Español、Français、Deutsch、Bahasa Indonesia、ไทย、Tiếng Việt、العربية、Português (Brasil) 和 Português (Portugal)。首次访问时会跟随浏览器语言，选择的语言会保存在本地；阿拉伯语界面会使用从右到左（RTL）的布局。
 
 ## 为什么使用它？
 

@@ -86,7 +86,7 @@ describe("session grouping", () => {
     });
     const tZh = createTranslator("zh-CN");
     expect(groupSummary(groupSessions(sessions)[1][1], tZh, "zh-CN")).toBe(
-      "1 个等待输入",
+      "等待输入 1",
     );
     const tEn = createTranslator("en");
     expect(groupSummary(groupSessions(sessions)[1][1], tEn, "en")).toBe(
@@ -102,7 +102,7 @@ describe("localized labels and times", () => {
     expect(activityLabel("working", tZh)).toBe("工作中");
     expect(activityLabel("working", tEn)).toBe("Working");
     expect(clientStateLabel("connected", tZh)).toBe("Codex 在线");
-    expect(clientLifecycleLabel("orphaned", tZh)).toBe("清理倒计时");
+    expect(clientLifecycleLabel("orphaned", tZh)).toBe("自动关闭倒计时");
     expect(clientLifecycleLabel("orphaned", tEn)).toBe("Cleanup countdown");
   });
 

@@ -17,21 +17,35 @@
           "zh-CN",
           "zh-TW",
           "en",
+          "ru",
+          "es",
           "fr",
           "de",
-          "ru",
           "ja",
           "ko",
+          "id",
+          "vi",
+          "th",
+          "ar",
+          "pt-BR",
+          "pt-PT",
         ];
         const titles = {
           "zh-CN": "Grok Bridge 会话管理",
           "zh-TW": "Grok Bridge 工作階段管理",
           en: "Grok Bridge Sessions",
+          ru: "Сессии Grok Bridge",
+          es: "Sesiones Grok Bridge",
           fr: "Sessions Grok Bridge",
           de: "Grok Bridge Sitzungen",
-          ru: "Сессии Grok Bridge",
           ja: "Grok Bridge セッション",
           ko: "Grok Bridge 세션",
+          id: "Sesi Grok Bridge",
+          vi: "Phiên Grok Bridge",
+          th: "เซสชัน Grok Bridge",
+          ar: "جلسات Grok Bridge",
+          "pt-BR": "Grok Bridge — Sessões",
+          "pt-PT": "Grok Bridge — Sessões",
         };
         const descriptions = {
           "zh-CN":
@@ -39,11 +53,20 @@
           "zh-TW":
             "Grok Bridge 本機工作階段主控台：Codex 監督者與 Grok 子代理狀態管理",
           en: "Grok Bridge local session console: Codex supervisors and Grok subagent management",
+          ru: "Локальная консоль сессий Grok Bridge: супервизоры Codex и управление субагентами Grok",
+          es: "Consola local de sesiones Grok Bridge: supervisores Codex y gestión de subagentes Grok",
           fr: "Console locale Grok Bridge : superviseurs Codex et gestion des sous-agents Grok",
           de: "Grok Bridge lokale Sitzungskonsole: Codex-Supervisoren und Grok-Subagenten-Verwaltung",
-          ru: "Локальная консоль сессий Grok Bridge: супервизоры Codex и управление субагентами Grok",
           ja: "Grok Bridge ローカルセッションコンソール：Codex スーパーバイザーと Grok サブエージェント管理",
           ko: "Grok Bridge 로컬 세션 콘솔: Codex 슈퍼바이저 및 Grok 서브에이전트 관리",
+          id: "Konsol sesi lokal Grok Bridge: manajemen supervisor Codex dan subagen Grok",
+          vi: "Bảng điều khiển phiên cục bộ Grok Bridge: quản lý giám sát viên Codex và agent con Grok",
+          th: "คอนโซลเซสชันท้องถิ่นของ Grok Bridge: จัดการ Codex ซูเปอร์ไวเซอร์และ Grok ซับเอเจนต์",
+          ar: "وحدة تحكم الجلسات المحلية لـ Grok Bridge: إدارة مشرفي Codex ووكلاء Grok الفرعيين",
+          "pt-BR":
+            "Console local do Grok Bridge: gerenciamento de supervisores Codex e subagentes Grok",
+          "pt-PT":
+            "Consola local do Grok Bridge: gestão de supervisores Codex e subagentes Grok",
         };
 
         function normalizeLocale(tag) {
@@ -66,6 +89,10 @@
             }
             return "zh-CN";
           }
+          if (lang === "pt") {
+            if (parts.includes("br")) return "pt-BR";
+            return "pt-PT";
+          }
           const primary = {
             en: "en",
             fr: "fr",
@@ -73,6 +100,11 @@
             ru: "ru",
             ja: "ja",
             ko: "ko",
+            es: "es",
+            id: "id",
+            th: "th",
+            vi: "vi",
+            ar: "ar",
           };
           return primary[lang] || null;
         }

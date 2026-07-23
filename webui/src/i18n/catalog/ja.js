@@ -8,7 +8,7 @@ export default {
   "app.brand": "GROK BRIDGE RUNTIME",
   "app.title": "スーパーバイザー／サブエージェント コンソール",
   "app.subtitle":
-    "各 Codex 会話はスーパーバイザー、その下の Grok セッションは折りたたみ可能な永続サブエージェントです。端末は WebSocket 経由でリアルタイムの読み取り専用出力を受け取り、このウィンドウを閉じても Runtime が保持するセッションには影響しません。",
+    "各 Codex セッションはスーパーバイザーとして機能し、そこから起動された Grok セッションがサブエージェントとなります。ターミナル出力は WebSocket 経由でリアルタイムに配信されます。ページを閉じても既存のセッションは終了しません。",
   "app.runtimeVersion": "Runtime v{version}",
   "app.githubTitle": "GitHub で grok-bridge-rs を開く",
   "app.github": "GitHub",
@@ -53,7 +53,7 @@ export default {
 
   "empty.title": "Grok セッションはありません",
   "empty.body":
-    "新しい Codex スーパーバイザー呼び出しはここに自動表示されます。各 Grok セッションは永続サブエージェントとして端末とライフサイクルを示します。",
+    "Codex が起動した Grok セッションは、サブエージェントとしてここに自動表示され、端末出力とライフサイクル状態が示されます。",
 
   "board.aria": "スーパーバイザーグループ",
 

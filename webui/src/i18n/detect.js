@@ -6,7 +6,9 @@ import {
 
 /**
  * Map a BCP 47 tag to a supported locale, or null if unsupported.
- * zh-Hant / TW → zh-TW; zh-Hans / zh / CN → zh-CN; others by primary language.
+ * zh-Hant / TW → zh-TW; zh-Hans / zh / CN → zh-CN;
+ * pt-BR / BR → pt-BR; other Portuguese tags (pt, pt-PT, pt-AO, …) → pt-PT;
+ * others by primary language.
  */
 export function normalizeLocale(tag) {
   if (tag == null || tag === "") return null;
@@ -33,6 +35,13 @@ export function normalizeLocale(tag) {
     }
     // zh, zh-Hans, zh-CN, zh-SG, plain zh → zh-CN
     return "zh-CN";
+  }
+
+  if (lang === "pt") {
+    // pt-BR, pt-Latn-BR, and other Brazil region tags → pt-BR
+    if (parts.includes("br")) return "pt-BR";
+    // pt, pt-PT, pt-AO, pt-MZ, … → European Portuguese catalog
+    return "pt-PT";
   }
 
   const primary = {

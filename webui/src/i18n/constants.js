@@ -12,6 +12,8 @@ export const SUPPORTED_LOCALES = [
   "vi",
   "th",
   "ar",
+  "pt-BR",
+  "pt-PT",
 ];
 
 export const DEFAULT_LOCALE = "en";
@@ -33,6 +35,8 @@ export const LOCALE_LABELS = {
   th: "ไทย",
   vi: "Tiếng Việt",
   ar: "العربية",
+  "pt-BR": "Português (Brasil)",
+  "pt-PT": "Português (Portugal)",
 };
 
 /** Locales that require right-to-left document direction. */

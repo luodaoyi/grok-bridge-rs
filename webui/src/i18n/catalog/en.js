@@ -8,7 +8,7 @@ export default {
   "app.brand": "GROK BRIDGE RUNTIME",
   "app.title": "Supervisor & Subagent Console",
   "app.subtitle":
-    "Each Codex conversation is a supervisor; Grok sessions under it are collapsible persistent subagents. Terminals receive read-only output over WebSocket in real time; closing this window does not affect sessions held by the Runtime.",
+    "Each Codex session serves as a supervisor; the Grok sessions it launches are its sub-agents. Terminal output is pushed in real time via WebSocket. Closing the page does not terminate existing sessions.",
   "app.runtimeVersion": "Runtime v{version}",
   "app.githubTitle": "Open grok-bridge-rs on GitHub",
   "app.github": "GitHub",
@@ -53,7 +53,7 @@ export default {
 
   "empty.title": "No Grok sessions",
   "empty.body":
-    "New Codex supervisor calls appear here automatically; each Grok session shows its terminal and lifecycle as a persistent subagent.",
+    "Grok sessions started by Codex appear here automatically as subagents, with terminal output and lifecycle status.",
 
   "board.aria": "Supervisor groups",
 

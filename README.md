@@ -14,7 +14,7 @@
 
 grok-build gives Codex a reliable local way to use Grok for real software work without creating a new unmanaged process for every request. Its shared runtime keeps sessions visible, interactive, grouped by Codex conversation, and easy to close from a browser.
 
-The WebUI includes a language switcher with 13 locales: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, Russian, Spanish, French, German, Indonesian, Thai, Vietnamese, and Arabic. It follows the browser language on first visit, remembers the selected language locally, and uses a right-to-left layout for Arabic.
+The WebUI includes a language switcher with 15 locales: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, Russian, Spanish, French, German, Indonesian, Thai, Vietnamese, Arabic, Portuguese (Brazil), and Portuguese (Portugal). It follows the browser language on first visit, remembers the selected language locally, and uses a right-to-left layout for Arabic.
 
 ## WebUI Preview
 

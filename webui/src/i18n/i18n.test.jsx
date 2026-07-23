@@ -72,12 +72,14 @@ const EXPECTED_LOCALES = [
   "vi",
   "th",
   "ar",
+  "pt-BR",
+  "pt-PT",
 ];
 
 describe("catalog completeness", () => {
-  it("keeps the same keys for all thirteen locales", () => {
+  it("keeps the same keys for all fifteen locales", () => {
     expect(SUPPORTED_LOCALES).toEqual(EXPECTED_LOCALES);
-    expect(SUPPORTED_LOCALES).toHaveLength(13);
+    expect(SUPPORTED_LOCALES).toHaveLength(15);
     expect(MESSAGE_KEYS.length).toBe(135);
     for (const locale of SUPPORTED_LOCALES) {
       const keys = Object.keys(catalogs[locale]).sort();
@@ -120,6 +122,12 @@ describe("catalog completeness", () => {
     expect(catalogs.th["app.title"]).toMatch(/คอนโซล|ตัวแทน/i);
     expect(catalogs.vi["session.close"]).toMatch(/Đóng|Grok/i);
     expect(catalogs.ar["app.title"]).toMatch(/وحدة|وكيل/i);
+    expect(catalogs["pt-BR"]["session.close"]).toMatch(/Fechar|Grok/i);
+    expect(catalogs["pt-PT"]["session.close"]).toMatch(/Fechar|Grok/i);
+    expect(catalogs["pt-PT"]["doc.description"]).toMatch(/Consola|gestão/i);
+    expect(catalogs["pt-BR"]["doc.description"]).toMatch(
+      /Console|gerenciamento/i,
+    );
   });
 
   it("only keeps intentional English-identical catalog values", () => {
@@ -151,6 +159,8 @@ describe("catalog completeness", () => {
     expect(LOCALE_LABELS.th).toBe("ไทย");
     expect(LOCALE_LABELS.vi).toBe("Tiếng Việt");
     expect(LOCALE_LABELS.ar).toBe("العربية");
+    expect(LOCALE_LABELS["pt-BR"]).toBe("Português (Brasil)");
+    expect(LOCALE_LABELS["pt-PT"]).toBe("Português (Portugal)");
     for (const locale of SUPPORTED_LOCALES) {
       expect(String(LOCALE_LABELS[locale] ?? "").trim().length).toBeGreaterThan(
         0,
@@ -185,13 +195,23 @@ describe("locale detection and persistence", () => {
     expect(normalizeLocale("vi-VN")).toBe("vi");
     expect(normalizeLocale("ar-EG")).toBe("ar");
     expect(normalizeLocale("ar-SA")).toBe("ar");
-    expect(normalizeLocale("pt-BR")).toBe(null);
-    expect(detectLocale(["pt-BR", "it-IT"])).toBe("en");
+    expect(normalizeLocale("pt-BR")).toBe("pt-BR");
+    expect(normalizeLocale("pt_BR")).toBe("pt-BR");
+    expect(normalizeLocale("pt-Latn-BR")).toBe("pt-BR");
+    expect(normalizeLocale("pt-PT")).toBe("pt-PT");
+    expect(normalizeLocale("pt")).toBe("pt-PT");
+    expect(normalizeLocale("pt-AO")).toBe("pt-PT");
+    expect(normalizeLocale("pt-MZ")).toBe("pt-PT");
+    expect(normalizeLocale("it-IT")).toBe(null);
+    expect(detectLocale(["it-IT", "nl-NL"])).toBe("en");
     expect(detectLocale(["es-MX", "en"])).toBe("es");
     expect(detectLocale(["id-ID", "en"])).toBe("id");
     expect(detectLocale(["th-TH", "en"])).toBe("th");
     expect(detectLocale(["vi-VN", "en"])).toBe("vi");
     expect(detectLocale(["ar-EG", "en"])).toBe("ar");
+    expect(detectLocale(["pt-BR", "en"])).toBe("pt-BR");
+    expect(detectLocale(["pt-PT", "en"])).toBe("pt-PT");
+    expect(detectLocale(["pt", "en"])).toBe("pt-PT");
     expect(detectLocale(["zh-Hant-TW", "en"])).toBe("zh-TW");
     expect(detectLocale(["fr-CA", "en-US"])).toBe("fr");
   });

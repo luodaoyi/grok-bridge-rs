@@ -8,7 +8,7 @@ export default {
   "app.brand": "GROK BRIDGE RUNTIME",
   "app.title": "슈퍼바이저 및 서브에이전트 콘솔",
   "app.subtitle":
-    "각 Codex 대화는 슈퍼바이저이며, 그 아래 Grok 세션은 접을 수 있는 영구 서브에이전트입니다. 터미널은 WebSocket으로 실시간 읽기 전용 출력을 받으며, 이 창을 닫아도 Runtime이 보유한 세션에는 영향이 없습니다.",
+    "각 Codex 세션은 슈퍼바이저 역할을 하며, 해당 세션에서 시작된 Grok 세션이 서브에이전트입니다. 터미널 출력은 WebSocket을 통해 실시간으로 전송됩니다. 페이지를 닫아도 기존 세션은 종료되지 않습니다.",
   "app.runtimeVersion": "Runtime v{version}",
   "app.githubTitle": "GitHub에서 grok-bridge-rs 열기",
   "app.github": "GitHub",
@@ -53,7 +53,7 @@ export default {
 
   "empty.title": "Grok 세션 없음",
   "empty.body":
-    "새 Codex 슈퍼바이저 호출이 여기에 자동으로 표시됩니다. 각 Grok 세션은 영구 서브에이전트로 터미널과 수명 주기를 보여 줍니다.",
+    "Codex가 시작한 Grok 세션은 서브에이전트로 여기에 자동 표시되며 터미널 출력과 수명 주기 상태를 보여 줍니다.",
 
   "board.aria": "슈퍼바이저 그룹",
 

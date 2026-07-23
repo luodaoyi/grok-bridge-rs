@@ -90,6 +90,12 @@ body {
   font-family: var(--tblr-font-sans-serif);
 }
 
+/* Localized labels preserve their intended casing and natural spacing. */
+.subheader {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 summary {
   -webkit-tap-highlight-color: transparent;
 }
@@ -169,7 +175,7 @@ summary::-webkit-details-marker {
   color: var(--tblr-cyan);
   font-size: 0.65rem;
   font-weight: 700;
-  letter-spacing: 0.15em;
+  letter-spacing: normal;
   text-transform: uppercase;
 }
 
@@ -401,6 +407,8 @@ summary::-webkit-details-marker {
 }
 
 .session-tabs {
+  overflow-x: auto;
+  overflow-y: hidden;
   gap: 0.3rem;
   padding: 0.65rem 1rem 0;
   border-bottom-color: var(--gb-border);

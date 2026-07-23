@@ -8,7 +8,7 @@ export default {
   "app.brand": "GROK BRIDGE RUNTIME",
   "app.title": "Bảng điều khiển Giám sát viên & Agent con",
   "app.subtitle":
-    "Mỗi cuộc hội thoại Codex là một giám sát viên; các phiên Grok bên dưới là agent con bền vững có thể thu gọn. Terminal nhận đầu ra chỉ đọc theo thời gian thực qua WebSocket; đóng cửa sổ này không ảnh hưởng các phiên do Runtime giữ.",
+    "Mỗi phiên Codex đóng vai trò giám sát viên; các phiên Grok do nó khởi chạy là agent con. Đầu ra terminal được đẩy theo thời gian thực qua WebSocket. Đóng trang không kết thúc các phiên hiện có.",
   "app.runtimeVersion": "Runtime v{version}",
   "app.githubTitle": "Mở grok-bridge-rs trên GitHub",
   "app.github": "GitHub",
@@ -53,7 +53,7 @@ export default {
 
   "empty.title": "Chưa có phiên Grok",
   "empty.body":
-    "Các lần gọi giám sát viên Codex mới sẽ xuất hiện tự động tại đây; mỗi phiên Grok hiển thị terminal và vòng đời dưới dạng agent con bền vững.",
+    "Các phiên Grok do Codex khởi chạy sẽ tự động xuất hiện tại đây dưới dạng tác nhân con, đồng thời hiển thị đầu ra terminal và trạng thái vòng đời.",
 
   "board.aria": "Nhóm giám sát viên",
 

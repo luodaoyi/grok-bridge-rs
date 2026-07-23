@@ -8,7 +8,7 @@ export default {
   "app.brand": "GROK BRIDGE RUNTIME",
   "app.title": "Konsol Supervisor & Subagen",
   "app.subtitle":
-    "Setiap percakapan Codex adalah supervisor; sesi Grok di bawahnya adalah subagen persisten yang dapat dilipat. Terminal menerima keluaran hanya-baca secara real time melalui WebSocket; menutup jendela ini tidak memengaruhi sesi yang dipegang Runtime.",
+    "Setiap sesi Codex berperan sebagai supervisor; sesi Grok yang diluncurkannya menjadi subagen. Output terminal dikirim secara real time melalui WebSocket. Menutup halaman tidak menghentikan sesi yang sudah ada.",
   "app.runtimeVersion": "Runtime v{version}",
   "app.githubTitle": "Buka grok-bridge-rs di GitHub",
   "app.github": "GitHub",
@@ -53,7 +53,7 @@ export default {
 
   "empty.title": "Tidak ada sesi Grok",
   "empty.body":
-    "Panggilan supervisor Codex baru akan muncul di sini secara otomatis; setiap sesi Grok menampilkan terminal dan siklus hidupnya sebagai subagen persisten.",
+    "Sesi Grok yang dimulai oleh Codex muncul secara otomatis di sini sebagai subagen serta menampilkan keluaran terminal dan status siklus hidup.",
 
   "board.aria": "Grup supervisor",
 

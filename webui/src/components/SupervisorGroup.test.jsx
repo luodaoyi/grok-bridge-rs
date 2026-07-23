@@ -151,8 +151,9 @@ describe("SupervisorGroup session tabs", () => {
     expect(tablist).not.toBeNull();
     expect(tabs()).toHaveLength(3);
     expect(panels()).toHaveLength(3);
-    // Horizontal compact row: overflow-x scroll class present, not wrapping stack.
-    expect(tablist.className).toMatch(/overflow-x-auto/);
+    // Custom overflow rules keep horizontal scrolling without a vertical bar.
+    expect(tablist.className).toMatch(/session-tabs/);
+    expect(tablist.className).not.toMatch(/overflow-x-auto/);
     expect(tablist.className).toMatch(/flex-nowrap/);
   });
 

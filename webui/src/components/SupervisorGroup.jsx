@@ -154,7 +154,7 @@ export function SupervisorGroup({
             <div
               role="tablist"
               aria-label={displayOwner}
-              className="nav nav-tabs flex-nowrap overflow-x-auto session-tabs"
+              className="nav nav-tabs flex-nowrap session-tabs"
             >
               {sessions.map((session, index) => {
                 const activity = activityOf(session);
