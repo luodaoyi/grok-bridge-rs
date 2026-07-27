@@ -41,4 +41,7 @@ export function readTerminalTheme() {
   };
 }
 
-export const TERMINAL_FONT_FAMILY = "var(--tblr-font-monospace)";
+// xterm.js uses this value for canvas text measurement. A CSS custom-property
+// reference is not resolved by the canvas font parser and can produce mismatched
+// cell widths on Windows, so keep the stack concrete and prefer Consolas.
+export const TERMINAL_FONT_FAMILY = 'Consolas, "Courier New", monospace';
