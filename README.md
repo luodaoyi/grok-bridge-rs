@@ -149,3 +149,5 @@ Unix Runtime startup creates a separate process session, so the Server remains a
 - [Issues and feature requests](https://github.com/luodaoyi/grok-bridge-rs/issues)
 - [Linux DO community](https://linux.do/)
 - [MIT License](LICENSE)
+
+<!-- CodeRabbit draft auto-review verification; do not merge. -->
