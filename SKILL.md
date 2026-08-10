@@ -5,11 +5,7 @@ description: Use Grok Build as a persistent local coding subagent for implementa
 
 # Grok Build Local Runtime
 
-Resolve `<skill-dir>` as the directory containing this file. Resolve `<bridge>` once per Codex task from the actual host OS and architecture; reuse that absolute path for every later command. Do not enumerate, sort, probe, or execute candidate binaries.
-
-- On Unix, run `uname -s` and `uname -m` once.
-- On Windows, run `powershell -NoProfile -Command "[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()"` once. Map `X64` to x86_64 and `Arm64` to ARM64. This reports the underlying OS architecture even when the host agent runs under emulation. If that API is unavailable, use `PROCESSOR_ARCHITEW6432` when set, otherwise `PROCESSOR_ARCHITECTURE`.
-- Map only the detected pair through this table. Treat `uname -s` result `Darwin` as `macOS`, `AMD64` as x86_64, and `aarch64`/`arm64` as ARM64. If the pair is unsupported or the selected file is missing, stop and report it instead of trying another architecture.
+Resolve `<skill-dir>` as the directory containing this file, then select the bundled executable for the host:
 
 | Host | Executable |
 | --- | --- |
@@ -18,9 +14,9 @@ Resolve `<skill-dir>` as the directory containing this file. Resolve `<bridge>` 
 | Linux x86_64 | `<skill-dir>/bin/linux-x86_64/grok-bridge` |
 | Linux ARM64 | `<skill-dir>/bin/linux-arm64/grok-bridge` |
 | macOS x86_64 | `<skill-dir>/bin/macos-x86_64/grok-bridge` |
-| macOS ARM64 | `<skill-dir>/bin/macos-arm64/grok-bridge` |
+| macOS Apple Silicon | `<skill-dir>/bin/macos-arm64/grok-bridge` |
 
-Refer to the selected executable as `<bridge>` below. Do not download another wrapper, invoke Python, or fall back to a different bundled architecture.
+Refer to the selected executable as `<bridge>` below. Do not download another wrapper or invoke Python.
 
 ## Subagent Model
 
@@ -40,14 +36,8 @@ For a user-authorized task in a trusted repository, use `--always-approve` when 
 ## Workflow
 
 1. Inspect the repository, current changes, constraints, and acceptance criteria.
-2. Bootstrap Hooks and the Runtime before any command that can auto-start the singleton:
-   - Run `<bridge> hooks status` first. If its JSON reports `installed: true`, do not run `hooks install`. If it reports false, or the bundled executable was replaced, run `<bridge> hooks install` once from a user context allowed to write `$GROK_HOME` or the default `~/.grok`, then confirm with `hooks status`. The command updates only managed entries; release archives also include fresh-install templates under `hooks/windows` and `hooks/unix`.
-   - Run `<bridge> server status` before `list`, `create`, `show`, `read`, `send`, `write`, `resize`, `wait`, `close`, `heartbeat`, `close-codex`, `terminal`, or `server ui`. `server status` is the non-starting liveness probe. Do not use `list` as a liveness probe because it auto-starts the singleton.
-   - If `server status` succeeds, reuse that singleton. If it reports that the Runtime is stopped, run `<bridge> server start` from a user context allowed to write `$GROK_HOME` or the default `~/.grok`, then require a successful `server status` before continuing. Starting a detached process from inside a filesystem sandbox does not remove that sandbox.
-   - When the host agent provides an approval or sandbox-escalation mechanism, use it on the first attempt for `hooks install` and `server start`. Do not first run either command inside the project sandbox merely to observe the expected write failure.
-   - Run `<bridge> doctor` only when Grok availability is uncertain; it does not replace the Hooks or Runtime checks above.
-
-   If session creation still reports that the Grok state directory is not writable, run `server status` first. When a singleton is running, inspect `list` for unrelated sessions and stop it only when no sessions are active or the user explicitly authorizes interruption. When no singleton is running, do not run `list`; start it directly from a writable user context. Retry `create` only after the restarted singleton passes `server status`.
+2. Run `<bridge> hooks install` before the first session and after replacing the bundled executable. The command is idempotent and updates only the managed entries in `$GROK_HOME/hooks/grok-bridge.json`, or the default `~/.grok/hooks/grok-bridge.json` when `GROK_HOME` is unset. Release archives also include fresh-install templates under `hooks/windows` and `hooks/unix`, but `hooks install` is required for custom Skill paths and safely preserves unrelated entries. Run `<bridge> doctor` if Grok availability is uncertain. `hooks status` always returns JSON, so inspect its `installed` field instead of relying only on the exit code.
+   If session creation reports that the Grok state directory is not writable, the Runtime likely inherited a filesystem sandbox. Inspect `list` first so unrelated sessions are not interrupted, then stop the affected singleton and run `<bridge> server start` from a user context that can write `GROK_HOME` or the default `~/.grok` before retrying `create`.
 3. Create one focused session per delegated task. Include the delegation contract in the prompt and select automatic approval according to the Subagent Model. Serialize the contract as one line before passing it to `--prompt`: keep the labeled clauses, but replace CR/LF with spaces. This preserves the whole contract even when a Windows installation resolves Grok through a command shim, where embedded line breaks can otherwise submit only the first line or be interpreted by the shell.
 
 ```text
@@ -147,9 +137,9 @@ Use `terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <label
 
 ## Command Rules
 
-- `hooks install|status|uninstall` manages the global Grok lifecycle Hook entries used to distinguish working, waiting, and completed turns. Check `status` before writing; install is idempotent and uninstall preserves unrelated hooks.
-- `server status` never starts the Runtime. Use it before every command family that can auto-start. Run `server start` from a writable user context when the singleton is stopped; `server stop|ui` manages or opens that singleton.
-- `create`, `list`, `show`, `read`, `send`, `write`, `resize`, `wait`, and `close` return JSON and auto-start the Server when needed. Invoke them only after the bootstrap check so the singleton never inherits an unintended sandbox.
+- `hooks install|status|uninstall` manages the global Grok lifecycle Hook entries used to distinguish working, waiting, and completed turns. Install is idempotent; uninstall preserves unrelated hooks.
+- `server start|status|stop|ui` manages the per-user singleton Runtime and opens its localhost WebUI.
+- `create`, `list`, `show`, `read`, `send`, `write`, `resize`, `wait`, and `close` return JSON and start the Server when needed.
 - `heartbeat` refreshes the current Codex lease; `close-codex` closes all sessions attached to the current Codex identity.
 - `read` uses byte cursors; `show` includes `rows`, `cols`, and `screen_ansi_base64` for terminal restoration.
 - `send --text` submits bracketed text with Enter; `write --data-base64` writes exact raw bytes.

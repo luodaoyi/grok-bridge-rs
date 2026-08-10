@@ -67,19 +67,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-      - name: Verify Windows host architecture mapping
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-          $platform = switch ($architecture) {
-            "X64" { "windows-x86_64" }
-            "Arm64" { "windows-arm64" }
-            default { throw "Unsupported Windows OS architecture: $architecture" }
-          }
-          if ($platform -ne "${{ matrix.platform }}") {
-            throw "Windows host mapping selected $platform, expected ${{ matrix.platform }}"
-          }
       - uses: actions/download-artifact@v8
         with:
           name: webui-dist
