@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.6 - 2026-08-17
+
+- global package TUI and hardening.
+
 ## 0.8.5 - 2026-08-06
 
 - Refined WebUI terminal typography with a compact line height for continuous box-drawing glyphs while preserving the concrete Consolas-first xterm font stack on Windows.
