@@ -18,11 +18,6 @@ const README_MD: &str = include_str!("../README.md");
 const README_CN_MD: &str = include_str!("../README-CN.md");
 const AGENTS_OPENAI_YAML: &str = include_str!("../agents/openai.yaml");
 
-#[cfg(windows)]
-const HOOKS_TEMPLATE: &str = include_str!("../hooks/windows/grok-bridge.json");
-#[cfg(not(windows))]
-const HOOKS_TEMPLATE: &str = include_str!("../hooks/unix/grok-bridge.json");
-
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub skill_root: PathBuf,
@@ -209,10 +204,10 @@ fn make_executable(_path: &Path) -> Result<()> {
 }
 
 fn same_file_contents(left: &Path, right: &Path) -> Result<bool> {
-    if let (Ok(left_path), Ok(right_path)) = (left.canonicalize(), right.canonicalize()) {
-        if left_path == right_path {
-            return Ok(true);
-        }
+    if let (Ok(left_path), Ok(right_path)) = (left.canonicalize(), right.canonicalize())
+        && left_path == right_path
+    {
+        return Ok(true);
     }
     if fs::metadata(left)?.len() != fs::metadata(right)?.len() {
         return Ok(false);

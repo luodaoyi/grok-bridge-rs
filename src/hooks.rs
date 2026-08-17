@@ -120,6 +120,7 @@ pub(crate) fn uninstall() -> Result<HookInstallStatus> {
     uninstall_at(&path, &command)
 }
 
+#[allow(dead_code)]
 pub fn install_with_binary(binary: &Path) -> Result<HookInstallStatus> {
     let path = hook_file_path()?;
     let command = hook_command(binary)?;
@@ -131,6 +132,7 @@ pub fn install_at_path(binary: &Path, hook_path: &Path) -> Result<HookInstallSta
     install_at(hook_path, &command)
 }
 
+#[allow(dead_code)]
 pub fn status_with_binary(binary: &Path) -> Result<HookInstallStatus> {
     let path = hook_file_path()?;
     let command = hook_command(binary)?;
@@ -142,6 +144,7 @@ pub fn status_at_path(binary: &Path, hook_path: &Path) -> Result<HookInstallStat
     status_at(hook_path, &command)
 }
 
+#[allow(dead_code)]
 pub fn uninstall_with_binary(binary: &Path) -> Result<HookInstallStatus> {
     let path = hook_file_path()?;
     let command = hook_command(binary)?;

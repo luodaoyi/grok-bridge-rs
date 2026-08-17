@@ -47,12 +47,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Release {
-                if handle_key(key, &mut selected, &mut message, &paths, &mut status)? {
-                    return Ok(());
-                }
-            }
+        if let Event::Key(key) = event::read()?
+            && key.kind != KeyEventKind::Release
+            && handle_key(key, &mut selected, &mut message, &paths, &mut status)?
+        {
+            return Ok(());
         }
     }
 }
