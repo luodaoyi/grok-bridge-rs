@@ -22,8 +22,7 @@ mod app {
     use serde::Serialize;
 
     use crate::{
-        hooks,
-        install,
+        hooks, install,
         protocol::{Request, ResponseEnvelope, ResponseResult, WaitCondition},
         server, session, terminal_gui, transport, tui,
     };
