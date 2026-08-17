@@ -29,7 +29,7 @@ const TARGETS = {
           windowsHide: true,
         });
     if (result.error) throw result.error;
-    process.exit(result.status ?? 0);
+    process.exit(result.status ?? (result.signal ? 1 : 0));
   } catch (err) {
     console.error(`[grok-bridge] ${err.message}`);
     process.exit(1);
