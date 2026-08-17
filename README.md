@@ -48,7 +48,40 @@ Install and sign in to Grok CLI first. Confirm that it is available in your term
 grok --version
 ```
 
-### 2. Install the Skill
+### 2. Install grok-bridge
+
+**Option A: npm Global Install (Recommended)**
+
+```bash
+pnpm add -g grok-bridge-rs@latest
+# or: npm install -g grok-bridge-rs@latest
+# or: yarn global add grok-bridge-rs@latest
+```
+
+After installation, run:
+
+```bash
+grok-bridge
+```
+
+If your terminal supports interactive TTY (stdin + stdout both are TTYs), a Chinese TUI will open automatically. The menu offers:
+
+1. **安装 / 更新并自动配置 Grok** — Extract skill files and native binary to `~/.agents/skills/grok-build/`, then install Grok hooks.
+2. **移除本工具的 Grok Hooks 配置** — Uninstall only the hooks managed by this tool; preserves the binary and other hooks.
+3. **打开 WebUI** — Starts the runtime server and opens the WebUI in your browser.
+4. **退出** — Exit the TUI.
+
+For headless/script use, you can also run:
+
+```bash
+grok-bridge install       # Install and configure
+grok-bridge status install   # Check installation status (JSON)
+grok-bridge uninstall     # Remove hooks only
+```
+
+After upgrading to a newer version via npm, run **安装 / 更新** (or `grok-bridge install`) to update the skill-dir binary copy.
+
+**Option B: Manual ZIP Install**
 
 Download the latest ZIP from [GitHub Releases](https://github.com/luodaoyi/grok-bridge-rs/releases), then extract it into your Agent Skills directory. The extracted folder should be `grok-build/`.
 

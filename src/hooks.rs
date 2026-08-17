@@ -120,6 +120,39 @@ pub(crate) fn uninstall() -> Result<HookInstallStatus> {
     uninstall_at(&path, &command)
 }
 
+pub fn install_with_binary(binary: &Path) -> Result<HookInstallStatus> {
+    let path = hook_file_path()?;
+    let command = hook_command(binary)?;
+    install_at(&path, &command)
+}
+
+pub fn install_at_path(binary: &Path, hook_path: &Path) -> Result<HookInstallStatus> {
+    let command = hook_command(binary)?;
+    install_at(hook_path, &command)
+}
+
+pub fn status_with_binary(binary: &Path) -> Result<HookInstallStatus> {
+    let path = hook_file_path()?;
+    let command = hook_command(binary)?;
+    status_at(&path, &command)
+}
+
+pub fn status_at_path(binary: &Path, hook_path: &Path) -> Result<HookInstallStatus> {
+    let command = hook_command(binary)?;
+    status_at(hook_path, &command)
+}
+
+pub fn uninstall_with_binary(binary: &Path) -> Result<HookInstallStatus> {
+    let path = hook_file_path()?;
+    let command = hook_command(binary)?;
+    uninstall_at(&path, &command)
+}
+
+pub fn uninstall_at_path(binary: &Path, hook_path: &Path) -> Result<HookInstallStatus> {
+    let command = hook_command(binary)?;
+    uninstall_at(hook_path, &command)
+}
+
 struct LimitedInput {
     bytes: Vec<u8>,
     overflowed: bool,

@@ -38,7 +38,40 @@ WebUI 内置语言切换器，目前支持 15 种语言：English、简体中文
 grok --version
 ```
 
-### 2. 安装 Skill
+### 2. 安装 grok-bridge
+
+**方式 A：npm 全局安装（推荐）**
+
+```bash
+pnpm add -g grok-bridge-rs@latest
+# 或者: npm install -g grok-bridge-rs@latest
+# 或者: yarn global add grok-bridge-rs@latest
+```
+
+安装后运行：
+
+```bash
+grok-bridge
+```
+
+如果你的终端支持交互式 TTY（stdin 和 stdout 都是 TTY），会自动打开中文 TUI 界面。菜单提供：
+
+1. **安装 / 更新并自动配置 Grok** — 提取 skill 文件和原生二进制到 `~/.agents/skills/grok-build/`，然后安装 Grok hooks。
+2. **移除本工具的 Grok Hooks 配置** — 只卸载本工具管理的 hooks；保留二进制和其他 hooks。
+3. **打开 WebUI** — 启动 runtime server 并在浏览器打开 WebUI。
+4. **退出** — 退出 TUI。
+
+如果在脚本或无交互环境中使用，也可以运行：
+
+```bash
+grok-bridge install       # 安装并配置
+grok-bridge status install   # 检查安装状态（JSON）
+grok-bridge uninstall     # 只移除 hooks
+```
+
+通过 npm 升级到新版本后，运行 **安装 / 更新**（或 `grok-bridge install`）来更新 skill-dir 中的二进制副本。
+
+**方式 B：手动 ZIP 安装**
 
 从 [GitHub Releases](https://github.com/luodaoyi/grok-bridge-rs/releases) 下载最新 ZIP，解压到 Agent Skills 目录。解压后应当得到 `grok-build/` 文件夹。
 

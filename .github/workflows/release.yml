@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   webui:
@@ -192,3 +193,111 @@ jobs:
             gh api --method DELETE \
               "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
           done
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@asural"
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binary-*
+          path: artifacts
+
+      - name: Update package versions
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NPM_VERSION="${VERSION#v}"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const version = process.env.NPM_VERSION || process.env.VERSION.replace(/^v/, '');
+          const packageDirs = ['win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64'];
+          const entryManifests = ['package.json', path.join('packages', 'grok-bridge-rs', 'package.json')];
+          for (const manifestPath of entryManifests) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            manifest.version = version;
+            for (const dependency of Object.keys(manifest.optionalDependencies || {})) {
+              manifest.optionalDependencies[dependency] = version;
+            }
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+          }
+          for (const directory of packageDirs) {
+            const manifestPath = path.join('packages', directory, 'package.json');
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            manifest.version = version;
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+          }
+          NODE
+
+      - name: Stage platform npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/{win32-x64,win32-arm64,linux-x64,linux-arm64,darwin-x64,darwin-arm64}/bin
+          cp artifacts/binary-windows-x86_64/grok-bridge.exe packages/win32-x64/bin/grok-bridge.exe
+          cp artifacts/binary-windows-arm64/grok-bridge.exe packages/win32-arm64/bin/grok-bridge.exe
+          cp artifacts/binary-linux-x86_64/grok-bridge packages/linux-x64/bin/grok-bridge
+          cp artifacts/binary-linux-arm64/grok-bridge packages/linux-arm64/bin/grok-bridge
+          cp artifacts/binary-macos-x86_64/grok-bridge packages/darwin-x64/bin/grok-bridge
+          cp artifacts/binary-macos-arm64/grok-bridge packages/darwin-arm64/bin/grok-bridge
+          chmod +x packages/linux-*/bin/grok-bridge packages/darwin-*/bin/grok-bridge
+
+      - name: Stage top-level npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/grok-bridge-rs/bin
+          cp bin/cli.js packages/grok-bridge-rs/bin/cli.js
+          cp README.md README-CN.md LICENSE packages/grok-bridge-rs/
+          cp README.md README-CN.md LICENSE .
+
+      - name: Publish platform npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in win32-x64 win32-arm64 linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            name=$(node -p "require('./packages/$directory/package.json').name")
+            version=$(node -p "require('./packages/$directory/package.json').version")
+            if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+              echo "Already published: $name@$version"
+            else
+              npm publish "./packages/$directory" --registry https://registry.npmjs.org --access public --provenance
+            fi
+          done
+
+      - name: Publish scoped compatibility npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "Already published: $name@$version"
+          else
+            npm publish --registry https://registry.npmjs.org --access public --provenance
+          fi
+
+      - name: Publish top-level npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./packages/grok-bridge-rs/package.json').name")
+          version=$(node -p "require('./packages/grok-bridge-rs/package.json').version")
+          if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "Already published: $name@$version"
+          else
+            npm publish ./packages/grok-bridge-rs --registry https://registry.npmjs.org --access public --provenance
+          fi

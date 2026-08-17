@@ -1,0 +1,50 @@
+{
+  "name": "@asural/grok-bridge",
+  "version": "0.8.5",
+  "description": "A local runtime server and CLI bridge for Grok Build",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "bin": {
+    "grok-bridge": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "README-CN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "cargo test --all-targets && cargo build && node test/launcher.test.js"
+  },
+  "optionalDependencies": {
+    "@asural/grok-bridge-win32-x64": "0.8.5",
+    "@asural/grok-bridge-win32-arm64": "0.8.5",
+    "@asural/grok-bridge-linux-x64": "0.8.5",
+    "@asural/grok-bridge-linux-arm64": "0.8.5",
+    "@asural/grok-bridge-darwin-x64": "0.8.5",
+    "@asural/grok-bridge-darwin-arm64": "0.8.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luodaoyi/grok-bridge-rs.git"
+  },
+  "homepage": "https://github.com/luodaoyi/grok-bridge-rs",
+  "bugs": {
+    "url": "https://github.com/luodaoyi/grok-bridge-rs/issues"
+  },
+  "keywords": [
+    "grok",
+    "build",
+    "agent",
+    "skill",
+    "cli",
+    "rust",
+    "tui"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
