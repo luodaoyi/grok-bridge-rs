@@ -1,10 +1,12 @@
 mod gui_fonts;
 mod hooks;
+mod install;
 mod protocol;
 mod server;
 mod session;
 mod terminal_gui;
 mod transport;
+mod tui;
 mod version_check;
 
 mod app {
@@ -12,7 +14,7 @@ mod app {
         collections::BTreeMap,
         env,
         ffi::{OsStr, OsString},
-        io::{self, Write},
+        io::{self, IsTerminal, Write},
         process::Command,
     };
 
@@ -20,9 +22,9 @@ mod app {
     use serde::Serialize;
 
     use crate::{
-        hooks,
+        hooks, install,
         protocol::{Request, ResponseEnvelope, ResponseResult, WaitCondition},
-        server, session, terminal_gui, transport,
+        server, session, terminal_gui, transport, tui,
     };
 
     struct TerminalOptions {
@@ -45,6 +47,10 @@ mod app {
         Doctor,
         Help,
         Version,
+        Tui,
+        Install,
+        InstallStatus,
+        Uninstall,
         InternalHook,
         InternalServer,
         #[cfg(windows)]
@@ -94,6 +100,40 @@ mod app {
             }
             Action::ServerUi => server_ui(),
             Action::Doctor => doctor(),
+            Action::Tui => {
+                tui::run()?;
+                Ok(0)
+            }
+            Action::Install => match install::apply() {
+                Ok(result) => {
+                    eprintln!("安装成功：{}", result.display());
+                    Ok(0)
+                }
+                Err(error) => {
+                    eprintln!("安装失败：{error:#}");
+                    Ok(1)
+                }
+            },
+            Action::InstallStatus => {
+                let paths = install::Paths::discover()?;
+                let status = install::status(&paths)?;
+                write_json(&status)?;
+                Ok(0)
+            }
+            Action::Uninstall => match install::uninstall() {
+                Ok(true) => {
+                    eprintln!("卸载成功：已移除 Grok Hooks 配置");
+                    Ok(0)
+                }
+                Ok(false) => {
+                    eprintln!("未找到本工具的 Hooks 配置");
+                    Ok(0)
+                }
+                Err(error) => {
+                    eprintln!("卸载失败：{error:#}");
+                    Ok(1)
+                }
+            },
             Action::Help => {
                 print_help();
                 Ok(0)
@@ -117,7 +157,12 @@ mod app {
 
     fn parse_args(arguments: Vec<OsString>) -> Result<Action> {
         let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
-            return Ok(Action::Help);
+            // No args: if both stdin and stdout are TTYs, open TUI; otherwise show help
+            return if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                Ok(Action::Tui)
+            } else {
+                Ok(Action::Help)
+            };
         };
         match command {
             "__hook" => {
@@ -176,6 +221,26 @@ mod app {
                 )
             }
             "terminal" => parse_terminal(&arguments[1..]),
+            "ui" => {
+                ensure_no_arguments(&arguments[1..])?;
+                Ok(Action::Tui)
+            }
+            "install" | "apply" => {
+                ensure_no_arguments(&arguments[1..])?;
+                Ok(Action::Install)
+            }
+            "status" => {
+                if arguments.len() > 1 && arguments[1].to_str() == Some("install") {
+                    ensure_no_arguments(&arguments[2..])?;
+                    Ok(Action::InstallStatus)
+                } else {
+                    bail!("unknown status subcommand; did you mean 'status install'?")
+                }
+            }
+            "uninstall" | "remove" => {
+                ensure_no_arguments(&arguments[1..])?;
+                Ok(Action::Uninstall)
+            }
             "doctor" | "--doctor" => {
                 ensure_no_arguments(&arguments[1..])?;
                 Ok(Action::Doctor)
@@ -559,7 +624,7 @@ mod app {
 
     fn print_help() {
         println!(
-            "grok-bridge {}\n\nUSAGE:\n  grok-bridge hooks install|status|uninstall\n  grok-bridge server start|status|stop|ui\n  grok-bridge create [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge list\n  grok-bridge heartbeat\n  grok-bridge close-codex\n  grok-bridge show --session <handle>\n  grok-bridge read --session <handle> [--cursor <n>] [--limit <bytes>] [--wait-ms <n>]\n  grok-bridge send --session <handle> (--text <text> | --interrupt)\n  grok-bridge write --session <handle> --data-base64 <base64>\n  grok-bridge resize --session <handle> --cols <n> --rows <n>\n  grok-bridge wait --session <handle> --for tui-idle|exit [--timeout-ms <n>]\n  grok-bridge close --session <handle>\n  grok-bridge terminal --session <handle>\n  grok-bridge terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge doctor\n\n`hooks install` adds the managed Grok lifecycle hooks used for accurate working, waiting, and idle status. `server ui` starts the singleton Runtime and opens its localhost WebUI. Session RPCs refresh the current CODEX_THREAD_ID/CODEX_SESSION_ID lease; `heartbeat` refreshes it explicitly and `close-codex` closes only that Codex session's Grok processes. `terminal --session` attaches to an existing persistent PTY session. Without `--session`, it creates a session and opens the terminal GUI. Closing either UI only detaches; only an explicit close action or expired safe-session lease terminates Grok. RPC commands print one JSON response; interactive UI commands are exceptions. Every session command auto-starts one per-user Runtime Server when needed.",
+            "grok-bridge {}\n\nUSAGE:\n  grok-bridge ui                     # 打开中文 TUI 安装配置界面\n  grok-bridge install                # 安装并配置 Grok Hooks\n  grok-bridge status install         # 显示安装状态（JSON）\n  grok-bridge uninstall              # 移除 Grok Hooks 配置\n  grok-bridge hooks install|status|uninstall\n  grok-bridge server start|status|stop|ui\n  grok-bridge create [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge list\n  grok-bridge heartbeat\n  grok-bridge close-codex\n  grok-bridge show --session <handle>\n  grok-bridge read --session <handle> [--cursor <n>] [--limit <bytes>] [--wait-ms <n>]\n  grok-bridge send --session <handle> (--text <text> | --interrupt)\n  grok-bridge write --session <handle> --data-base64 <base64>\n  grok-bridge resize --session <handle> --cols <n> --rows <n>\n  grok-bridge wait --session <handle> --for tui-idle|exit [--timeout-ms <n>]\n  grok-bridge close --session <handle>\n  grok-bridge terminal --session <handle>\n  grok-bridge terminal [--cwd <path>] [--prompt <text>] [--model <model>] [--owner <title>] [--always-approve]\n  grok-bridge doctor\n\nNPM GLOBAL 安装：\n  pnpm add -g grok-bridge-rs@latest\n  grok-bridge                        # 自动打开 TUI\n\n`ui` / `install` / `uninstall` 管理全局 npm 安装后的 Skill 和 Hooks。`hooks install` 为现有 CLI 用户保留（从 current_exe 安装）。`server ui` 打开 WebUI。RPC 命令刷新当前 CODEX_THREAD_ID/CODEX_SESSION_ID 租约；`heartbeat` 显式刷新，`close-codex` 只关闭该 Codex 会话的 Grok 进程。`terminal --session` 附着到持久 PTY 会话。关闭 UI 只 detach；显式 close 或过期租约才终止 Grok。RPC 输出一行 JSON；交互 UI 是例外。每个会话命令在需要时自动启动单例 Runtime Server。",
             env!("CARGO_PKG_VERSION")
         );
     }
