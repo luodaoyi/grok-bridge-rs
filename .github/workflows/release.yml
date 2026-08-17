@@ -178,7 +178,7 @@ jobs:
 
   cleanup:
     if: ${{ always() }}
-    needs: release
+    needs: [release, publish-npm]
     permissions:
       actions: write
     runs-on: ubuntu-24.04
