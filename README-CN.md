@@ -69,6 +69,23 @@ grok-bridge status install   # 检查安装状态（JSON）
 grok-bridge uninstall     # 只移除 hooks
 ```
 
+**管理单例 Runtime 服务器：**
+
+检查当前服务器状态：
+
+```bash
+grok-bridge server status
+grok-bridge list
+```
+
+如需重启服务器（例如升级或配置更改后），确认没有关键会话正在运行，然后：
+
+```bash
+grok-bridge server stop
+grok-bridge server start
+grok-bridge server status
+```
+
 通过 npm 升级到新版本后，运行 **安装 / 更新**（或 `grok-bridge install`）来更新 skill-dir 中的二进制副本。
 
 **方式 B：手动 ZIP 安装**

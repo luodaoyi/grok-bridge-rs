@@ -26,8 +26,8 @@ const ACTIONS: [&str; 4] = [
 
 pub fn run() -> Result<()> {
     enable_raw_mode().context("启用终端原始模式失败")?;
-    execute!(io::stdout(), EnterAlternateScreen).context("进入 TUI 屏幕失败")?;
     let _restore = RestoreTerminal;
+    execute!(io::stdout(), EnterAlternateScreen).context("进入 TUI 屏幕失败")?;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("创建 TUI 终端失败")?;
@@ -134,7 +134,11 @@ fn render_menu(
     frame.render_widget(title, areas[0]);
 
     let status_text = vec![
-        Line::from(status_line("安装状态", status.display())),
+        Line::from(status_line(
+            "安装状态",
+            status.display(),
+            status.binary_current && status.hooks_configured,
+        )),
         Line::from(status_line(
             "原生 EXE（当前版本）",
             if status.binary_current {
@@ -142,6 +146,7 @@ fn render_menu(
             } else {
                 "需更新"
             },
+            status.binary_current,
         )),
         Line::from(status_line(
             "Grok Hooks",
@@ -150,6 +155,7 @@ fn render_menu(
             } else {
                 "未配置"
             },
+            status.hooks_configured,
         )),
         Line::from(format!("目标路径：{}", paths.installed_binary.display())),
     ];
@@ -191,8 +197,7 @@ fn render_menu(
     );
 }
 
-fn status_line(label: &str, value: &str) -> Vec<Span<'static>> {
-    let ready = value.contains("已") || value == "已就绪";
+fn status_line(label: &str, value: &str, ready: bool) -> Vec<Span<'static>> {
     vec![
         Span::raw(format!("{label}：")),
         Span::styled(
@@ -216,11 +221,20 @@ fn open_webui() -> Result<()> {
         Some(crate::protocol::ResponseResult::ServerInfo(info)) => match info.web_url {
             Some(url) => {
                 #[cfg(windows)]
-                let _ = Command::new("explorer.exe").arg(&url).spawn();
+                Command::new("explorer.exe")
+                    .arg(&url)
+                    .spawn()
+                    .context("无法启动 explorer.exe")?;
                 #[cfg(target_os = "macos")]
-                let _ = Command::new("open").arg(&url).spawn();
+                Command::new("open")
+                    .arg(&url)
+                    .spawn()
+                    .context("无法启动 open")?;
                 #[cfg(all(unix, not(target_os = "macos")))]
-                let _ = Command::new("xdg-open").arg(&url).spawn();
+                Command::new("xdg-open")
+                    .arg(&url)
+                    .spawn()
+                    .context("无法启动 xdg-open")?;
                 Ok(())
             }
             None => anyhow::bail!("Runtime WebUI 不可用；检查 server stderr"),
@@ -302,6 +316,50 @@ mod tests {
         let key_k = KeyEvent::new(KeyCode::Char('k'), event::KeyModifiers::NONE);
         handle_key(key_k, &mut selected, &mut message, &paths, &mut status).unwrap();
         assert_eq!(selected, 1, "'k' should decrease selection");
+    }
+
+    #[test]
+    fn handle_key_up_at_zero_stays_at_bound() {
+        let mut selected = 0;
+        let mut message = String::new();
+        let paths = Paths::discover().unwrap();
+        let mut status = InstallationStatus {
+            binary_installed: false,
+            binary_current: false,
+            hooks_configured: false,
+        };
+
+        let key_up = KeyEvent::new(KeyCode::Up, event::KeyModifiers::NONE);
+        handle_key(key_up, &mut selected, &mut message, &paths, &mut status).unwrap();
+        assert_eq!(selected, 0, "up arrow at index 0 should stay at 0");
+
+        let key_k = KeyEvent::new(KeyCode::Char('k'), event::KeyModifiers::NONE);
+        handle_key(key_k, &mut selected, &mut message, &paths, &mut status).unwrap();
+        assert_eq!(selected, 0, "'k' at index 0 should stay at 0");
+    }
+
+    #[test]
+    fn handle_key_down_at_last_item_stays_at_bound() {
+        let mut selected = ACTIONS.len() - 1;
+        let mut message = String::new();
+        let paths = Paths::discover().unwrap();
+        let mut status = InstallationStatus {
+            binary_installed: false,
+            binary_current: false,
+            hooks_configured: false,
+        };
+
+        let key_down = KeyEvent::new(KeyCode::Down, event::KeyModifiers::NONE);
+        handle_key(key_down, &mut selected, &mut message, &paths, &mut status).unwrap();
+        assert_eq!(
+            selected,
+            ACTIONS.len() - 1,
+            "down arrow at last item should stay"
+        );
+
+        let key_j = KeyEvent::new(KeyCode::Char('j'), event::KeyModifiers::NONE);
+        handle_key(key_j, &mut selected, &mut message, &paths, &mut status).unwrap();
+        assert_eq!(selected, ACTIONS.len() - 1, "'j' at last item should stay");
     }
 
     #[test]

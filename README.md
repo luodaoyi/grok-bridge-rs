@@ -79,6 +79,23 @@ grok-bridge status install   # Check installation status (JSON)
 grok-bridge uninstall     # Remove hooks only
 ```
 
+**Managing the singleton Runtime server:**
+
+To check the current server state:
+
+```bash
+grok-bridge server status
+grok-bridge list
+```
+
+If you need to restart the server (e.g., after upgrading or configuration changes), confirm no critical sessions are running, then:
+
+```bash
+grok-bridge server stop
+grok-bridge server start
+grok-bridge server status
+```
+
 After upgrading to a newer version via npm, run **安装 / 更新** (or `grok-bridge install`) to update the skill-dir binary copy.
 
 **Option B: Manual ZIP Install**

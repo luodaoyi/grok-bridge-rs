@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require('node:child_process');
-const { existsSync, readFileSync } = require('node:fs');
+const { existsSync } = require('node:fs');
 const { dirname, join } = require('node:path');
 
 const TARGETS = {
@@ -22,12 +22,7 @@ const TARGETS = {
       ? { stdio: 'inherit', env: process.env, windowsHide: true }
       : args.length > 0
       ? { stdio: ['ignore', 'inherit', 'inherit'], env: process.env, windowsHide: true }
-      : {
-          input: readHookInput(),
-          stdio: ['pipe', 'inherit', 'inherit'],
-          env: process.env,
-          windowsHide: true,
-        });
+      : { stdio: ['inherit', 'inherit', 'inherit'], env: process.env, windowsHide: true });
     if (result.error) throw result.error;
     process.exit(result.status ?? (result.signal ? 1 : 0));
   } catch (err) {
@@ -60,8 +55,4 @@ function resolveBinary() {
       'Reinstall from the official npm registry.'
     );
   }
-}
-
-function readHookInput() {
-  return process.stdin.isTTY ? undefined : readFileSync(0);
 }
