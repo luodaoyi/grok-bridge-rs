@@ -228,7 +228,7 @@ fn handle_key(
         KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
         KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(4),
-        KeyCode::Enter => match *selected {
+        KeyCode::Enter if key.kind == KeyEventKind::Press => match *selected {
             0 => match install::apply() {
                 Ok(result) => {
                     *status = install::status(paths)?;

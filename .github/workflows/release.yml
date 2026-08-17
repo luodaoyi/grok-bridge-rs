@@ -215,7 +215,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@asural"
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@974686ed5098c7f9c9289ec946b9058e496a2561 # v8
         with:
           pattern: binary-*
           path: artifacts
@@ -269,7 +269,6 @@ jobs:
           mkdir -p packages/grok-bridge-rs/bin
           cp bin/cli.js packages/grok-bridge-rs/bin/cli.js
           cp README.md README-CN.md LICENSE packages/grok-bridge-rs/
-          cp README.md README-CN.md LICENSE .
 
       - name: Publish platform npm packages
         shell: bash
