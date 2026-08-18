@@ -9,7 +9,56 @@ permissions:
   contents: write
 
 jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Skip if this tag is already fully released
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          ver="${tag#v}"
+          skip=true
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub release $tag exists"
+          else
+            echo "GitHub release $tag does not exist"
+            skip=false
+          fi
+
+          packages=(
+            "@asural/grok-bridge-win32-x64"
+            "@asural/grok-bridge-win32-arm64"
+            "@asural/grok-bridge-linux-x64"
+            "@asural/grok-bridge-linux-arm64"
+            "@asural/grok-bridge-darwin-x64"
+            "@asural/grok-bridge-darwin-arm64"
+            "@asural/grok-bridge"
+            "grok-bridge-rs"
+          )
+
+          for name in "${packages[@]}"; do
+            if npm view "$name@$ver" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+              echo "Already published: $name@$ver"
+            else
+              echo "Missing npm package: $name@$ver"
+              skip=false
+            fi
+          done
+
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   webui:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
@@ -28,6 +77,7 @@ jobs:
         working-directory: webui
       - name: Upload webui-dist
         id: upload-webui
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: webui-dist
@@ -35,19 +85,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Wait before retrying webui-dist upload
-        if: failure() && steps.upload-webui.conclusion == 'failure'
+        if: steps.upload-webui.outcome == 'failure'
         run: sleep 15
       - name: Retry upload webui-dist
-        if: failure() && steps.upload-webui.conclusion == 'failure'
+        if: steps.upload-webui.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: webui-dist
           path: webui/dist
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
 
   build:
-    needs: webui
+    needs: [gate, webui]
+    if: needs.gate.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +174,7 @@ jobs:
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Upload binary
         id: upload-binary
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: binary-${{ matrix.platform }}
@@ -129,19 +182,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Wait before retrying binary upload
-        if: failure() && steps.upload-binary.conclusion == 'failure'
+        if: steps.upload-binary.outcome == 'failure'
         run: sleep 15
       - name: Retry upload binary
-        if: failure() && steps.upload-binary.conclusion == 'failure'
+        if: steps.upload-binary.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: binary-${{ matrix.platform }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
 
   release:
-    needs: build
+    needs: [gate, build]
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
@@ -212,8 +267,8 @@ jobs:
           fi
 
   cleanup:
-    if: ${{ always() }}
-    needs: [release, publish-npm]
+    if: ${{ !cancelled() && needs.gate.outputs.skip != 'true' && needs.release.result == 'success' && needs.publish-npm.result == 'success' }}
+    needs: [gate, release, publish-npm]
     permissions:
       actions: write
     runs-on: ubuntu-24.04
@@ -235,7 +290,8 @@ jobs:
           done
 
   publish-npm:
-    needs: release
+    needs: [gate, release]
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     permissions:
       id-token: write
@@ -306,39 +362,76 @@ jobs:
           cp README.md README-CN.md LICENSE packages/grok-bridge-rs/
 
       - name: Publish platform npm packages
+        id: publish-platform
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          failed=0
           for directory in win32-x64 win32-arm64 linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
             name=$(node -p "require('./packages/$directory/package.json').name")
             version=$(node -p "require('./packages/$directory/package.json').version")
             if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
               echo "Already published: $name@$version"
+            elif npm publish "./packages/$directory" --registry https://registry.npmjs.org --access public --provenance; then
+              echo "Published: $name@$version"
             else
-              npm publish "./packages/$directory" --registry https://registry.npmjs.org --access public --provenance
+              echo "Failed to publish: $name@$version"
+              failed=1
             fi
           done
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more platform packages failed"
+            exit 1
+          fi
 
       - name: Publish scoped compatibility npm package
+        id: publish-scoped
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          failed=0
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
           if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
             echo "Already published: $name@$version"
+          elif npm publish --registry https://registry.npmjs.org --access public --provenance; then
+            echo "Published: $name@$version"
           else
-            npm publish --registry https://registry.npmjs.org --access public --provenance
+            echo "Failed to publish: $name@$version"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "Package step failed"
+            exit 1
           fi
 
       - name: Publish top-level npm package
+        id: publish-toplevel
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          failed=0
           name=$(node -p "require('./packages/grok-bridge-rs/package.json').name")
           version=$(node -p "require('./packages/grok-bridge-rs/package.json').version")
           if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
             echo "Already published: $name@$version"
+          elif npm publish ./packages/grok-bridge-rs --registry https://registry.npmjs.org --access public --provenance; then
+            echo "Published: $name@$version"
           else
-            npm publish ./packages/grok-bridge-rs --registry https://registry.npmjs.org --access public --provenance
+            echo "Failed to publish: $name@$version"
+            failed=1
           fi
+          if [ "$failed" -ne 0 ]; then
+            echo "Package step failed"
+            exit 1
+          fi
+
+      - name: Fail if any npm publish failed
+        if: steps.publish-platform.outcome == 'failure' || steps.publish-scoped.outcome == 'failure' || steps.publish-toplevel.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "One or more npm steps failed"
+          exit 1
