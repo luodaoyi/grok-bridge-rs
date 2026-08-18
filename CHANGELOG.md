@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.7 - 2026-08-18
+
+- Hardened the release workflow so hung apt mirrors time out and artifact uploads retry after transient network errors.
+
 ## 0.8.6 - 2026-08-17
 
 - global package TUI and hardening.

@@ -26,7 +26,20 @@ jobs:
         working-directory: webui
       - run: npm run build
         working-directory: webui
-      - uses: actions/upload-artifact@v7
+      - name: Upload webui-dist
+        id: upload-webui
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: webui-dist
+          path: webui/dist
+          if-no-files-found: error
+          retention-days: 1
+      - name: Wait before retrying webui-dist upload
+        if: failure() && steps.upload-webui.conclusion == 'failure'
+        run: sleep 15
+      - name: Retry upload webui-dist
+        if: failure() && steps.upload-webui.conclusion == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: webui-dist
           path: webui/dist
@@ -75,6 +88,8 @@ jobs:
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           set -euo pipefail
 
@@ -86,8 +101,15 @@ jobs:
             /etc/apt/sources.list.d/*.list \
             /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::ForceIPv4=true update
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::ForceIPv4=true install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          apt_opts=(
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o Acquire::ForceIPv4=true
+          )
+          timeout 180 sudo apt-get "${apt_opts[@]}" update
+          timeout 180 sudo apt-get "${apt_opts[@]}" install -y \
             libxcb-render0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
@@ -98,7 +120,20 @@ jobs:
       - run: cargo test --locked --target ${{ matrix.target }}
       - run: cargo clippy --locked --target ${{ matrix.target }} --all-targets --all-features -- -D warnings
       - run: cargo build --release --locked --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@v7
+      - name: Upload binary
+        id: upload-binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: binary-${{ matrix.platform }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+          retention-days: 1
+      - name: Wait before retrying binary upload
+        if: failure() && steps.upload-binary.conclusion == 'failure'
+        run: sleep 15
+      - name: Retry upload binary
+        if: failure() && steps.upload-binary.conclusion == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: binary-${{ matrix.platform }}
           path: ${{ matrix.binary }}
