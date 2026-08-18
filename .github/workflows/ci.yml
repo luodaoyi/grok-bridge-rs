@@ -14,12 +14,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
+        with:
+          persist-credentials: false
       - run: cargo fmt --check
 
   webui:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
@@ -67,6 +71,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
+        with:
+          persist-credentials: false
       - name: Verify Windows host architecture mapping
         if: runner.os == 'Windows'
         shell: pwsh

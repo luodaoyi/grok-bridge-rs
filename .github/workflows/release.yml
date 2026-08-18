@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   gate:
@@ -27,8 +27,17 @@ jobs:
           ver="${tag#v}"
           skip=true
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "GitHub release $tag exists"
+          archive="grok-build-skill-${tag}.zip"
+          checksum="${archive}.sha256"
+          if release_json="$(gh release view "$tag" --json isDraft,assets 2>/dev/null)"; then
+            if printf "%s\n" "$release_json" | jq -e --arg archive "$archive" --arg checksum "$checksum" \
+              '(.isDraft | not) and ([.assets[].name] | index($archive) != null) and ([.assets[].name] | index($checksum) != null)' \
+              >/dev/null; then
+              echo "GitHub release $tag is published with required assets"
+            else
+              echo "GitHub release $tag is draft or missing assets"
+              skip=false
+            fi
           else
             echo "GitHub release $tag does not exist"
             skip=false
@@ -198,6 +207,8 @@ jobs:
     needs: [gate, build]
     if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
         with:
@@ -259,6 +270,7 @@ jobs:
           archive="grok-build-skill-${GITHUB_REF_NAME}.zip"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=false
           else
             gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" \
               --verify-tag \
@@ -294,6 +306,7 @@ jobs:
     if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     permissions:
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@1044a6dea927916f2c38ba5aeffbc0a847b1221a # v7
