@@ -429,9 +429,6 @@ jobs:
             exit 1
           fi
 
-      - name: Fail if any npm publish failed
+      - name: Fail job if any npm publish failed
         if: steps.publish-platform.outcome == 'failure' || steps.publish-scoped.outcome == 'failure' || steps.publish-toplevel.outcome == 'failure'
-        shell: bash
-        run: |
-          echo "One or more npm steps failed"
-          exit 1
+        run: exit 1
