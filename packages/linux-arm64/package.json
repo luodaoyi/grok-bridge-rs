@@ -1,0 +1,16 @@
+{
+  "name": "@asural/grok-bridge-linux-arm64",
+  "version": "0.8.5",
+  "description": "Linux ARM64 native binary for grok-bridge",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "bin": {
+    "grok-bridge": "bin/grok-bridge"
+  },
+  "files": ["bin"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luodaoyi/grok-bridge-rs.git"
+  }
+}
