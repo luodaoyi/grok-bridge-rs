@@ -1,6 +1,6 @@
 {
   "name": "@asural/grok-bridge-linux-x64",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Linux x64 native binary for grok-bridge",
   "license": "MIT",
   "os": ["linux"],
