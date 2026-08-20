@@ -1,5 +1,7 @@
 #[cfg(unix)]
 use std::io;
+#[cfg(any(windows, test))]
+use std::io::Read;
 use std::{
     env,
     ffi::OsString,
@@ -187,6 +189,37 @@ fn connect_first(candidates: &[Name<'_>]) -> Result<Stream> {
     }
 }
 
+/// Windows named pipes in PIPE_NOWAIT mode report "no data yet" as a
+/// successful zero-byte read (`ERROR_NO_DATA` → `Ok(0)`), not `WouldBlock`.
+/// `BufReader` treats `Ok(0)` as sticky EOF, so a client that polls before
+/// the server has written the response would permanently see
+/// "protocol peer closed" even after the bytes arrive. Remap empty reads
+/// to `WouldBlock` *before* they reach `BufReader`. Real disconnects still
+/// surface as `ERROR_BROKEN_PIPE` / `ERROR_PIPE_NOT_CONNECTED` errors.
+/// Matches `write_frame_all`, which already treats Windows `Ok(0)` as stall.
+#[cfg(any(windows, test))]
+struct RemapNowaitEmptyRead<R>(R);
+
+#[cfg(any(windows, test))]
+impl<R: Read> Read for RemapNowaitEmptyRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.0.read(buf) {
+            Ok(0) => Err(std::io::Error::from(ErrorKind::WouldBlock)),
+            other => other,
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<W: Write> Write for RemapNowaitEmptyRead<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
 fn call_over_stream(stream: Stream, envelope: &RequestEnvelope) -> Result<ResponseEnvelope> {
     // Non-blocking I/O lets both sides enforce I/O deadlines on every platform
     // (Windows named pipes do not support native socket timeouts).
@@ -194,6 +227,9 @@ fn call_over_stream(stream: Stream, envelope: &RequestEnvelope) -> Result<Respon
         .set_nonblocking(true)
         .context("failed to enable non-blocking runtime I/O")?;
     let response_deadline = Instant::now() + response_deadline_for(&envelope.request);
+    #[cfg(windows)]
+    let mut connection = BufReader::new(RemapNowaitEmptyRead(stream));
+    #[cfg(not(windows))]
     let mut connection = BufReader::new(stream);
     write_frame_all(
         connection.get_mut(),
@@ -981,7 +1017,7 @@ impl Drop for ShortTempDir {
 mod tests {
     use super::*;
     use crate::protocol::WaitCondition;
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
 
     #[test]
     fn reads_exactly_one_frame() {
@@ -1010,6 +1046,48 @@ mod tests {
         let expired = Instant::now() - Duration::from_secs(1);
         let error = read_frame(&mut reader, Some(expired)).unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error:#}");
+    }
+
+    /// Simulates a PIPE_NOWAIT named pipe: first read is a successful
+    /// zero-byte completion (no data yet), later reads return the frame.
+    struct EmptyThenFrame {
+        sent_empty: bool,
+        rest: Cursor<Vec<u8>>,
+    }
+
+    impl Read for EmptyThenFrame {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.sent_empty {
+                self.sent_empty = true;
+                return Ok(0);
+            }
+            self.rest.read(buf)
+        }
+    }
+
+    #[test]
+    fn nowait_empty_read_without_remap_looks_like_peer_closed() {
+        // Documents the actual failure path: BufReader latches Ok(0) as EOF
+        // and read_frame reports peer-closed even though a frame follows.
+        let inner = EmptyThenFrame {
+            sent_empty: false,
+            rest: Cursor::new(b"pong\n".to_vec()),
+        };
+        let mut reader = BufReader::new(inner);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let error = read_frame(&mut reader, Some(deadline)).unwrap_err();
+        assert!(error.to_string().contains("peer closed"), "{error:#}");
+    }
+
+    #[test]
+    fn nowait_empty_read_is_not_eof_when_data_follows() {
+        let inner = EmptyThenFrame {
+            sent_empty: false,
+            rest: Cursor::new(b"pong\n".to_vec()),
+        };
+        let mut reader = BufReader::new(RemapNowaitEmptyRead(inner));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert_eq!(read_frame(&mut reader, Some(deadline)).unwrap(), b"pong\n");
     }
 
     #[test]
@@ -1156,6 +1234,50 @@ mod tests {
         let error = write_frame_all(&mut server, &data, Duration::from_millis(100)).unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error:#}");
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn read_frame_waits_for_a_delayed_ipc_response() {
+        // Issue #24: a client that polls before the server writes must not
+        // treat an empty nowait read as EOF. The server sleeps, then writes
+        // a frame; the non-blocking client must still receive it. Throwaway
+        // pipe/socket name, never the live runtime endpoint.
+        #[cfg(unix)]
+        let (name, _dir) = {
+            let dir = ShortTempDir::new("delayed-read");
+            let name = dir
+                .path()
+                .join("test.sock")
+                .to_fs_name::<GenericFilePath>()
+                .unwrap();
+            (name, dir)
+        };
+        #[cfg(windows)]
+        let name = {
+            static NEXT_PIPE_ID: AtomicU64 = AtomicU64::new(0);
+            let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
+            format!("grok-bridge-delayed-read-test-{}-{id}", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let listener = ListenerOptions::new()
+            .name(name.clone())
+            .create_sync()
+            .unwrap();
+        let client = Stream::connect(name).unwrap();
+        let mut server = listener.accept().unwrap();
+        let server_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(80));
+            server.write_all(b"pong\n").unwrap();
+        });
+        client.set_nonblocking(true).unwrap();
+        #[cfg(windows)]
+        let mut reader = BufReader::new(RemapNowaitEmptyRead(client));
+        #[cfg(not(windows))]
+        let mut reader = BufReader::new(client);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert_eq!(read_frame(&mut reader, Some(deadline)).unwrap(), b"pong\n");
+        server_thread.join().unwrap();
     }
 
     #[test]
