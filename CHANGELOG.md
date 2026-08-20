@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.8 - 2026-08-20
+
+- Fixed Windows named-pipe `PIPE_NOWAIT` empty reads being treated as EOF, which made RPC clients report `protocol peer closed before sending a frame` even after the runtime had executed the request (Issue #24).
+
 ## 0.8.7 - 2026-08-18
 
 - Hardened the release workflow so hung apt mirrors time out and artifact uploads retry after transient network errors.
