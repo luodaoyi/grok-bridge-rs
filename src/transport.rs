@@ -191,14 +191,16 @@ fn connect_first(candidates: &[Name<'_>]) -> Result<Stream> {
 
 /// Windows named pipes in PIPE_NOWAIT mode report "no data yet" as a
 /// successful zero-byte read (`ERROR_NO_DATA` → `Ok(0)`), not `WouldBlock`.
-/// `BufReader` treats `Ok(0)` as sticky EOF, so a client that polls before
-/// the server has written the response would permanently see
-/// "protocol peer closed" even after the bytes arrive. Remap empty reads
-/// to `WouldBlock` *before* they reach `BufReader`. Real disconnects still
-/// surface as `ERROR_BROKEN_PIPE` / `ERROR_PIPE_NOT_CONNECTED` errors.
-/// Matches `write_frame_all`, which already treats Windows `Ok(0)` as stall.
+/// `BufReader` treats `Ok(0)` as sticky EOF, so a reader that polls before
+/// the peer has written would permanently see "protocol peer closed" even
+/// after the bytes arrive. Remap empty reads to `WouldBlock` *before* they
+/// reach `BufReader`. Real disconnects still surface as `ERROR_BROKEN_PIPE`
+/// / `ERROR_PIPE_NOT_CONNECTED` errors. Used on the client response-read
+/// path and the server request-read path. Unix is not wrapped: Unix `Ok(0)`
+/// is real EOF. Matches `write_frame_all`, which already treats Windows
+/// `Ok(0)` as stall.
 #[cfg(any(windows, test))]
-struct RemapNowaitEmptyRead<R>(R);
+pub(crate) struct RemapNowaitEmptyRead<R>(pub(crate) R);
 
 #[cfg(any(windows, test))]
 impl<R: Read> Read for RemapNowaitEmptyRead<R> {
@@ -1018,6 +1020,7 @@ mod tests {
     use super::*;
     use crate::protocol::WaitCondition;
     use std::io::{Cursor, Read};
+    use std::sync::mpsc;
 
     #[test]
     fn reads_exactly_one_frame() {
@@ -1062,6 +1065,24 @@ mod tests {
                 return Ok(0);
             }
             self.rest.read(buf)
+        }
+    }
+
+    /// Observes the first OS-level `read` so delayed-write tests can wait until
+    /// the server has actually polled an empty nowait pipe before the client
+    /// writes. Nested *inside* `RemapNowaitEmptyRead`.
+    struct SignalAfterFirstRead<R> {
+        inner: R,
+        signal: Option<mpsc::Sender<()>>,
+    }
+
+    impl<R: Read> Read for SignalAfterFirstRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let result = self.inner.read(buf);
+            if let Some(tx) = self.signal.take() {
+                let _ = tx.send(());
+            }
+            result
         }
     }
 
@@ -1278,6 +1299,131 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         assert_eq!(read_frame(&mut reader, Some(deadline)).unwrap(), b"pong\n");
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn read_frame_waits_for_a_delayed_ipc_request() {
+        // Issue #27: the server accepts, sets PIPE_NOWAIT, and reads before the
+        // client has written. An empty nowait read must not be treated as EOF.
+        // Throwaway pipe/socket name, never the live runtime endpoint.
+        assert_eq!(read_delayed_ipc_request(b"ping\n".to_vec()), b"ping\n");
+    }
+
+    #[test]
+    fn read_frame_waits_for_a_delayed_long_ipc_request() {
+        // Reporter's 600-char `show --session` repro: a delayed long frame
+        // must still be read in full. Throwaway name, never the live endpoint.
+        let mut payload = vec![b'a'; 600];
+        payload.push(b'\n');
+        let expected = payload.clone();
+        assert_eq!(read_delayed_ipc_request(payload), expected);
+    }
+
+    /// Server-as-reader delayed first byte: wait until the first nowait read
+    /// has been attempted, then let the client write. Production wraps only
+    /// on Windows; tests wrap too so Linux CI exercises the adapter.
+    fn read_delayed_ipc_request(payload: Vec<u8>) -> Vec<u8> {
+        #[cfg(unix)]
+        let (name, _dir) = {
+            let dir = ShortTempDir::new("delayed-req");
+            let name = dir
+                .path()
+                .join("test.sock")
+                .to_fs_name::<GenericFilePath>()
+                .unwrap();
+            (name, dir)
+        };
+        #[cfg(windows)]
+        let name = {
+            static NEXT_PIPE_ID: AtomicU64 = AtomicU64::new(0);
+            let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
+            format!("grok-bridge-delayed-req-test-{}-{id}", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let listener = ListenerOptions::new()
+            .name(name.clone())
+            .create_sync()
+            .unwrap();
+        let mut client = Stream::connect(name).unwrap();
+        let server = listener.accept().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let (first_read_tx, first_read_rx) = mpsc::channel();
+        let client_thread = thread::spawn(move || {
+            first_read_rx.recv().unwrap();
+            client.write_all(&payload).unwrap();
+        });
+        let mut reader = BufReader::new(RemapNowaitEmptyRead(SignalAfterFirstRead {
+            inner: server,
+            signal: Some(first_read_tx),
+        }));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let frame = read_frame(&mut reader, Some(deadline)).unwrap();
+        client_thread.join().unwrap();
+        frame
+    }
+
+    #[test]
+    fn read_frame_fails_fast_when_ipc_peer_disconnects() {
+        // Real disconnect must still fail without hanging the full 30s
+        // request deadline. Unix is not wrapped: Unix Ok(0) is real EOF.
+        // Windows keeps the production wrap; PIPE_NOWAIT may report a
+        // closed peer as Ok(0)/ERROR_NO_DATA, which the remap turns into
+        // WouldBlock, so the short deadline is what bounds the wait.
+        #[cfg(unix)]
+        let (name, _dir) = {
+            let dir = ShortTempDir::new("peer-drop");
+            let name = dir
+                .path()
+                .join("test.sock")
+                .to_fs_name::<GenericFilePath>()
+                .unwrap();
+            (name, dir)
+        };
+        #[cfg(windows)]
+        let name = {
+            static NEXT_PIPE_ID: AtomicU64 = AtomicU64::new(0);
+            let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
+            format!("grok-bridge-peer-drop-test-{}-{id}", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let listener = ListenerOptions::new()
+            .name(name.clone())
+            .create_sync()
+            .unwrap();
+        let client = Stream::connect(name).unwrap();
+        let server = listener.accept().unwrap();
+        drop(client);
+        server.set_nonblocking(true).unwrap();
+        #[cfg(windows)]
+        let mut reader = BufReader::new(RemapNowaitEmptyRead(server));
+        #[cfg(not(windows))]
+        let mut reader = BufReader::new(server);
+        let started = Instant::now();
+        let error =
+            read_frame(&mut reader, Some(Instant::now() + Duration::from_secs(2))).unwrap_err();
+        let message = error.to_string().to_ascii_lowercase();
+        #[cfg(not(windows))]
+        assert!(
+            message.contains("peer closed")
+                || message.contains("broken pipe")
+                || message.contains("eof"),
+            "{error:#}"
+        );
+        #[cfg(windows)]
+        assert!(
+            message.contains("timed out")
+                || message.contains("broken pipe")
+                || message.contains("not connected")
+                || message.contains("peer closed"),
+            "{error:#}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "disconnect must not hang the 30s request deadline, took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

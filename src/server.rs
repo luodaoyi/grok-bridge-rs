@@ -23,6 +23,8 @@ use tungstenite::{
     protocol::{Role, WebSocketConfig},
 };
 
+#[cfg(windows)]
+use crate::transport::RemapNowaitEmptyRead;
 #[cfg(not(unix))]
 use crate::transport::call_anonymous;
 use crate::{
@@ -409,6 +411,9 @@ fn handle_connection(stream: Stream, state: Arc<RuntimeState>) {
     if stream.set_nonblocking(true).is_err() {
         return;
     }
+    #[cfg(windows)]
+    let mut connection = BufReader::new(RemapNowaitEmptyRead(stream));
+    #[cfg(not(windows))]
     let mut connection = BufReader::new(stream);
     let frame = match read_frame(
         &mut connection,
