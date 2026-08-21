@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed Windows named-pipe `PIPE_NOWAIT` writes of modest RPC frames stalling until the I/O deadline when `WriteFile` returned `Ok(0)` instead of a partial write (Issue #27).
+- When the Windows Grok launcher exits before reporting a PID, `create` now includes the launcher exit code instead of waiting out the 10s handshake timeout (Issue #27).
 
 ## 0.8.9 - 2026-08-21
 
