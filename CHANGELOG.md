@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed Windows named-pipe `PIPE_NOWAIT` writes of modest RPC frames stalling until the I/O deadline when `WriteFile` returned `Ok(0)` instead of a partial write (Issue #27).
+
 ## 0.8.9 - 2026-08-21
 
 - Fixed Windows server named-pipe empty `PIPE_NOWAIT` reads being treated as EOF, which caused larger RPC write requests to fail with `os error 232` (Issue #27).
