@@ -58,6 +58,9 @@ const STABLE_SCOPE_SCAN_LEAD_MS: u64 = 500;
 const ERROR_ESCALATION_TIMEOUT_MS: u64 = 1_500;
 #[cfg(windows)]
 const WINDOWS_LAUNCH_HANDSHAKE_TIMEOUT_MS: u32 = 10_000;
+/// Bytes of PTY output included in a failed Windows PID handshake error.
+#[cfg(windows)]
+const WINDOWS_PRE_HANDSHAKE_OUTPUT_MAX: usize = 2 * 1024;
 /// How long a closed session handle stays in the idempotent re-close tombstone.
 const CLOSED_TOMBSTONE_TTL_MS: u64 = 10 * 60 * 1_000;
 const CLOSED_TOMBSTONE_CAP: usize = 1_024;
@@ -1291,34 +1294,10 @@ impl Session {
         let launcher_process_id = child
             .process_id()
             .context("the PTY child did not report a process ID")?;
-        #[cfg(not(windows))]
-        let process_id = launcher_process_id;
         #[cfg(windows)]
-        let (process_id, child) = {
-            let mut child = child;
-            let launch = child
-                .as_raw_handle()
-                .context("portable-pty did not expose the Windows launcher handle")
-                .and_then(|handle| {
-                    scope_job
-                        .assign_process(handle)
-                        .context("failed to assign the Windows launcher to its Job Object")?;
-                    launch_gate
-                        .signal()
-                        .context("failed to release the Windows Grok launch gate")?;
-                    launch_gate
-                        .wait_for_grok_pid(WINDOWS_LAUNCH_HANDSHAKE_TIMEOUT_MS, Some(handle))
-                        .context("the Windows Grok launcher did not report its process ID")
-                });
-            let process_id = match launch {
-                Ok(process_id) => process_id,
-                Err(error) => {
-                    let _ = child.kill();
-                    return Err(error);
-                }
-            };
-            (process_id, child)
-        };
+        let initial_process_id = None;
+        #[cfg(not(windows))]
+        let initial_process_id = Some(launcher_process_id);
         let (writer_tx, writer_rx) = sync_channel(WRITER_QUEUE_CAPACITY);
         let now = now_millis();
         let session = Arc::new(Self {
@@ -1333,7 +1312,7 @@ impl Session {
                 cwd: config.cwd.to_string_lossy().into_owned(),
                 model: config.model,
                 always_approve: config.always_approve,
-                process_id: Some(process_id),
+                process_id: initial_process_id,
                 created_at_ms: now,
                 updated_at_ms: now,
                 exit_code: None,
@@ -1369,8 +1348,47 @@ impl Session {
             cleanup_committed: AtomicBool::new(false),
         });
 
-        spawn_reader(Arc::clone(&session), reader);
+        // Writer first so ConPTY inherit-cursor CSI 6n replies are not lost if
+        // the reader observes the query before the writer thread exists.
         spawn_writer(Arc::clone(&session), writer, writer_rx);
+        spawn_reader(Arc::clone(&session), reader);
+        #[cfg(windows)]
+        let child = {
+            let mut child = child;
+            let launch = child
+                .as_raw_handle()
+                .context("portable-pty did not expose the Windows launcher handle")
+                .and_then(|handle| {
+                    session
+                        .scope_job
+                        .as_ref()
+                        .context("Windows sessions own a Job Object")?
+                        .assign_process(handle)
+                        .context("failed to assign the Windows launcher to its Job Object")?;
+                    launch_gate
+                        .signal()
+                        .context("failed to release the Windows Grok launch gate")?;
+                    launch_gate
+                        .wait_for_grok_pid(WINDOWS_LAUNCH_HANDSHAKE_TIMEOUT_MS, Some(handle))
+                        .context("the Windows Grok launcher did not report its process ID")
+                });
+            match launch {
+                Ok(process_id) => {
+                    session.set_process_id(process_id)?;
+                    child
+                }
+                Err(error) => {
+                    let output = session.bounded_pre_handshake_output();
+                    let _ = child.kill();
+                    session.close_writer();
+                    return Err(if output.is_empty() {
+                        error
+                    } else {
+                        error.context(format!("pre-handshake PTY output: {output}"))
+                    });
+                }
+            }
+        };
         spawn_waiter(Arc::clone(&session), child);
         Ok(session)
     }
@@ -2298,6 +2316,31 @@ impl Session {
         if let Ok(mut writer) = self.writer_tx.lock() {
             writer.take();
         }
+    }
+
+    #[cfg(windows)]
+    fn set_process_id(&self, process_id: u32) -> Result<()> {
+        self.inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session state lock was poisoned"))?
+            .process_id = Some(process_id);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn bounded_pre_handshake_output(&self) -> String {
+        let Ok(inner) = self.inner.lock() else {
+            return String::new();
+        };
+        let mut bytes = Vec::new();
+        for chunk in &inner.chunks {
+            bytes.extend_from_slice(&chunk.data);
+            if bytes.len() >= WINDOWS_PRE_HANDSHAKE_OUTPUT_MAX {
+                break;
+            }
+        }
+        let end = bytes.len().min(WINDOWS_PRE_HANDSHAKE_OUTPUT_MAX);
+        bytes[..end].escape_ascii().to_string()
     }
 
     fn release_master(&self) {
@@ -3291,6 +3334,9 @@ impl WindowsLaunchGate {
         let event_name = OsString::from(format!("Local\\grok-bridge-launch-{id}"));
         let pid_report_name = OsString::from(format!("Local\\grok-bridge-pid-{id}"));
         let wide_event_name = windows_wide_null(&event_name);
+        // Manual-reset (bManualReset=TRUE) so SetEvent stays signaled if the
+        // ConPTY child reaches WaitForSingleObject after the parent released
+        // the gate.
         let raw_event = unsafe { CreateEventW(std::ptr::null(), 1, 0, wide_event_name.as_ptr()) };
         if raw_event.is_null() {
             return Err(std::io::Error::last_os_error())
@@ -3884,6 +3930,15 @@ pub(crate) mod tests {
     const WINDOWS_PROCESS_TREE_GATE_ENV: &str = "GROK_BRIDGE_TEST_PROCESS_TREE_GATE";
     #[cfg(windows)]
     const WINDOWS_PROCESS_TREE_HELPER_TEST: &str = "session::tests::windows_process_tree_helper";
+    #[cfg(windows)]
+    const WINDOWS_JOB_CHILD_HELPER_ENV: &str = "GROK_BRIDGE_TEST_JOB_CHILD_HELPER";
+    #[cfg(windows)]
+    const WINDOWS_JOB_CHILD_GATE_ENV: &str = "GROK_BRIDGE_TEST_JOB_CHILD_GATE";
+    #[cfg(windows)]
+    const WINDOWS_JOB_CHILD_PID_ENV: &str = "GROK_BRIDGE_TEST_JOB_CHILD_PID";
+    #[cfg(windows)]
+    const WINDOWS_JOB_CHILD_HELPER_TEST: &str =
+        "session::tests::windows_job_child_handshake_helper";
     #[cfg(windows)]
     const WINDOWS_PROCESS_TREE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -4493,6 +4548,133 @@ pub(crate) mod tests {
         let gate = WindowsLaunchGate::create().unwrap();
         let error = wait_for_windows_launch_gate(&gate.event_name, 1).unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error:#}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_gate_signal_before_wait_is_not_lost() {
+        let gate = WindowsLaunchGate::create().unwrap();
+        gate.signal().unwrap();
+        wait_for_windows_launch_gate(&gate.event_name, 100).unwrap();
+    }
+
+    #[test]
+    fn title_callbacks_reply_to_conpty_cursor_position_report() {
+        let mut parser = vt100::Parser::new_with_callbacks(
+            INITIAL_ROWS,
+            INITIAL_COLS,
+            0,
+            TitleCallbacks::default(),
+        );
+        parser.process(b"\x1b[6n");
+        let responses = std::mem::take(&mut parser.callbacks_mut().responses);
+        assert_eq!(responses, vec![b"\x1b[1;1R".to_vec()]);
+        parser.process(b"\x1b[5n");
+        let responses = std::mem::take(&mut parser.callbacks_mut().responses);
+        assert_eq!(responses, vec![b"\x1b[0n".to_vec()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handshake_error_includes_escaped_pre_handshake_pty_output() {
+        let session = test_session(SessionPhase::Starting);
+        session.append_output(b"\x1b[6nhelper-failed".to_vec());
+        let output = session.bounded_pre_handshake_output();
+        assert!(output.contains("\\x1b[6n"), "{output}");
+        assert!(output.contains("helper-failed"), "{output}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_job_child_handshake_helper() {
+        if env::var_os(WINDOWS_JOB_CHILD_HELPER_ENV).is_none() {
+            return;
+        }
+        let gate_name = env::var_os(WINDOWS_JOB_CHILD_GATE_ENV)
+            .expect("job-child helper launch gate must be provided");
+        let pid_name = env::var_os(WINDOWS_JOB_CHILD_PID_ENV)
+            .expect("job-child helper PID report must be provided");
+        let status = run_windows_job_child(vec![
+            gate_name,
+            pid_name,
+            OsString::from("cmd.exe"),
+            OsString::from("/c"),
+            OsString::from("exit 0"),
+        ])
+        .expect("job-child helper must complete");
+        assert_eq!(status, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn conpty_job_child_handshake_reports_pid() {
+        let gate = WindowsLaunchGate::create().unwrap();
+        let job = WindowsJob::create().unwrap();
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                cols: INITIAL_COLS,
+                rows: INITIAL_ROWS,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let reader = pair.master.try_clone_reader().unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let mut command = CommandBuilder::new(env::current_exe().unwrap());
+        command.args(["--exact", WINDOWS_JOB_CHILD_HELPER_TEST, "--nocapture"]);
+        command.env(WINDOWS_JOB_CHILD_HELPER_ENV, "1");
+        command.env(WINDOWS_JOB_CHILD_GATE_ENV, &gate.event_name);
+        command.env(WINDOWS_JOB_CHILD_PID_ENV, &gate.pid_report_name);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        pump_conpty_replies(reader, writer);
+        job.assign_process(child.as_raw_handle().expect("launcher handle"))
+            .unwrap();
+        gate.signal().unwrap();
+        let started = Instant::now();
+        let pid = gate
+            .wait_for_grok_pid(5_000, child.as_raw_handle())
+            .expect("ConPTY job-child handshake must report a PID");
+        let _ = child.kill();
+        assert_ne!(pid, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "handshake took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(windows)]
+    fn pump_conpty_replies(mut reader: Box<dyn Read + Send>, mut writer: Box<dyn Write + Send>) {
+        thread::spawn(move || {
+            let mut parser = vt100::Parser::new_with_callbacks(
+                INITIAL_ROWS,
+                INITIAL_COLS,
+                0,
+                TitleCallbacks::default(),
+            );
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => return,
+                    Ok(read) => {
+                        parser.process(&buffer[..read]);
+                        let responses = std::mem::take(&mut parser.callbacks_mut().responses);
+                        for response in responses {
+                            if writer
+                                .write_all(&response)
+                                .and_then(|()| writer.flush())
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
     }
 
     #[cfg(windows)]
