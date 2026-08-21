@@ -1379,8 +1379,12 @@ impl Session {
                 }
                 Err(error) => {
                     let output = session.bounded_pre_handshake_output();
+                    if let Some(job) = session.scope_job.as_ref() {
+                        let _ = job.terminate(TerminationLevel::Kill);
+                    }
                     let _ = child.kill();
                     session.close_writer();
+                    session.release_master();
                     return Err(if output.is_empty() {
                         error
                     } else {
@@ -4643,6 +4647,51 @@ pub(crate) mod tests {
             "handshake took {:?}",
             started.elapsed()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_handshake_terminates_the_job_scope() {
+        let gate = WindowsLaunchGate::create().unwrap();
+        let job = WindowsJob::create().unwrap();
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                cols: INITIAL_COLS,
+                rows: INITIAL_ROWS,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let reader = pair.master.try_clone_reader().unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let mut command = CommandBuilder::new(env::current_exe().unwrap());
+        command.args(["--exact", WINDOWS_JOB_CHILD_HELPER_TEST, "--nocapture"]);
+        command.env(WINDOWS_JOB_CHILD_HELPER_ENV, "1");
+        command.env(WINDOWS_JOB_CHILD_GATE_ENV, &gate.event_name);
+        command.env(WINDOWS_JOB_CHILD_PID_ENV, &gate.pid_report_name);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        pump_conpty_replies(reader, writer);
+        job.assign_process(child.as_raw_handle().expect("launcher handle"))
+            .unwrap();
+        let error = gate
+            .wait_for_grok_pid(200, child.as_raw_handle())
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error:#}");
+        job.terminate(TerminationLevel::Kill).unwrap();
+        let _ = child.kill();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if job.process_scope_alive() == ScopeAlive::Gone {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Job Object still had members after handshake failure cleanup"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[cfg(windows)]

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Windows session spawn now starts the PTY writer/reader before the Grok PID handshake so ConPTY inherit-cursor `CSI 6n` is answered and the launcher can report its process ID; handshake errors include bounded pre-handshake PTY output.
+- Windows session spawn now starts the PTY writer/reader before the Grok PID handshake so ConPTY inherit-cursor `CSI 6n` is answered and the launcher can report its process ID. Handshake errors include bounded pre-handshake PTY output, terminate the Job Object, and drop the PTY master so a failed `create` cannot leak the helper tree.
 
 ## 0.8.10 - 2026-08-21
 
