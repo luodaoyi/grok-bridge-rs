@@ -1,6 +1,6 @@
 {
   "name": "@asural/grok-bridge-darwin-x64",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "description": "macOS x64 native binary for grok-bridge",
   "license": "MIT",
   "os": ["darwin"],
