@@ -1,6 +1,6 @@
 {
   "name": "@asural/grok-bridge-win32-arm64",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "description": "Windows ARM64 native binary for grok-bridge",
   "license": "MIT",
   "os": ["win32"],
