@@ -1307,7 +1307,7 @@ impl Session {
                         .signal()
                         .context("failed to release the Windows Grok launch gate")?;
                     launch_gate
-                        .wait_for_grok_pid(WINDOWS_LAUNCH_HANDSHAKE_TIMEOUT_MS)
+                        .wait_for_grok_pid(WINDOWS_LAUNCH_HANDSHAKE_TIMEOUT_MS, Some(handle))
                         .context("the Windows Grok launcher did not report its process ID")
                 });
             let process_id = match launch {
@@ -3324,27 +3324,47 @@ impl WindowsLaunchGate {
         }
     }
 
-    fn wait_for_grok_pid(&self, timeout_ms: u32) -> Result<u32> {
+    fn wait_for_grok_pid(
+        &self,
+        timeout_ms: u32,
+        launcher: Option<std::os::windows::io::RawHandle>,
+    ) -> Result<u32> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::{
             Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
-            System::Threading::{ReleaseSemaphore, WaitForSingleObject},
+            System::Threading::{
+                GetExitCodeProcess, ReleaseSemaphore, WaitForMultipleObjects, WaitForSingleObject,
+            },
         };
 
-        let handle = self.pid_report.as_raw_handle() as _;
-        match unsafe { WaitForSingleObject(handle, timeout_ms) } {
-            WAIT_OBJECT_0 => {}
-            WAIT_TIMEOUT => {
+        let semaphore = self.pid_report.as_raw_handle() as _;
+        let wait_status = if let Some(launcher) = launcher {
+            let handles = [semaphore, launcher as _];
+            unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, timeout_ms) }
+        } else {
+            unsafe { WaitForSingleObject(semaphore, timeout_ms) }
+        };
+        match (wait_status, launcher) {
+            (WAIT_OBJECT_0, _) => {}
+            (status, Some(launcher)) if status == WAIT_OBJECT_0 + 1 => {
+                let mut exit_code = 0_u32;
+                if unsafe { GetExitCodeProcess(launcher as _, &mut exit_code) } == 0 {
+                    return Err(std::io::Error::last_os_error())
+                        .context("the launcher process exited before reporting a PID");
+                }
+                bail!("the launcher process exited with code {exit_code} before reporting a PID");
+            }
+            (WAIT_TIMEOUT, _) => {
                 bail!("timed out after {timeout_ms} ms waiting for the Windows Grok process ID")
             }
-            WAIT_FAILED => {
+            (WAIT_FAILED, _) => {
                 return Err(std::io::Error::last_os_error())
                     .context("failed while waiting for the Windows Grok process ID");
             }
-            status => bail!("unexpected Windows Grok PID wait status: {status}"),
+            (status, _) => bail!("unexpected Windows Grok PID wait status: {status}"),
         }
         let mut previous = 0_i32;
-        if unsafe { ReleaseSemaphore(handle, 1, &mut previous) } == 0 {
+        if unsafe { ReleaseSemaphore(semaphore, 1, &mut previous) } == 0 {
             return Err(std::io::Error::last_os_error())
                 .context("failed to read the Windows Grok process ID");
         }
@@ -4464,7 +4484,7 @@ pub(crate) mod tests {
     fn launch_gate_reports_the_real_grok_pid_without_a_file_or_shell() {
         let gate = WindowsLaunchGate::create().unwrap();
         report_windows_grok_pid(&gate.pid_report_name, 1234).unwrap();
-        assert_eq!(gate.wait_for_grok_pid(100).unwrap(), 1234);
+        assert_eq!(gate.wait_for_grok_pid(100, None).unwrap(), 1234);
     }
 
     #[cfg(windows)]
@@ -4473,6 +4493,53 @@ pub(crate) mod tests {
         let gate = WindowsLaunchGate::create().unwrap();
         let error = wait_for_windows_launch_gate(&gate.event_name, 1).unwrap_err();
         assert!(error.to_string().contains("timed out"), "{error:#}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wait_for_grok_pid_fails_fast_when_the_launcher_exits() {
+        use std::os::windows::io::AsRawHandle;
+        use std::process::{Command, Stdio};
+
+        let gate = WindowsLaunchGate::create().unwrap();
+        let mut child = Command::new("cmd.exe")
+            .args(["/c", "exit", "7"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let error = gate
+            .wait_for_grok_pid(10_000, Some(child.as_raw_handle()))
+            .unwrap_err();
+        let _ = child.wait();
+        assert!(
+            error.to_string().contains("exited with code 7"),
+            "{error:#}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wait_for_grok_pid_still_reports_when_watching_a_live_launcher() {
+        use std::os::windows::io::AsRawHandle;
+        use std::process::{Command, Stdio};
+
+        let gate = WindowsLaunchGate::create().unwrap();
+        let mut child = Command::new("cmd.exe")
+            .args(["/c", "ping", "-n", "8", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        report_windows_grok_pid(&gate.pid_report_name, 1234).unwrap();
+        let pid = gate.wait_for_grok_pid(1_000, Some(child.as_raw_handle()));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(pid.unwrap(), 1234);
     }
 
     #[test]

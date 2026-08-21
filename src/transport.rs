@@ -197,8 +197,9 @@ fn connect_first(candidates: &[Name<'_>]) -> Result<Stream> {
 /// reach `BufReader`. Real disconnects still surface as `ERROR_BROKEN_PIPE`
 /// / `ERROR_PIPE_NOT_CONNECTED` errors. Used on the client response-read
 /// path and the server request-read path. Unix is not wrapped: Unix `Ok(0)`
-/// is real EOF. Matches `write_frame_all`, which already treats Windows
-/// `Ok(0)` as stall.
+/// is real EOF. Matches `write_frame_all`, which treats Windows `Ok(0)` as
+/// backpressure and shrinks an all-or-nothing nowait write that could not
+/// fit in the remaining pipe buffer.
 #[cfg(any(windows, test))]
 pub(crate) struct RemapNowaitEmptyRead<R>(pub(crate) R);
 
@@ -498,28 +499,41 @@ pub(crate) fn read_frame(reader: &mut impl BufRead, deadline: Option<Instant>) -
 /// produce a bounded write error instead of blocking the caller forever.
 ///
 /// Windows named pipes in nonblocking (PIPE_NOWAIT) mode report a full buffer
-/// as `Ok(0)`: a successful zero-byte completion, not a peer close. Such a
-/// zero-byte write is retried under the same bounded backoff and deadline.
-/// On every other platform `Ok(0)` still means the peer closed the stream.
+/// as `Ok(0)`: a successful zero-byte completion, not a peer close. WriteFile
+/// is also all-or-nothing: a slice larger than the remaining pipe buffer
+/// completes with `Ok(0)` instead of a partial write. Retrying that same
+/// oversized slice never makes progress — even when the peer is reading —
+/// so the next attempt is shrunk until a slice fits. A 1-byte `Ok(0)` is a
+/// real stall and uses the same bounded backoff. On every other platform
+/// `Ok(0)` still means the peer closed the stream.
 ///
 /// There is deliberately no trailing `flush()`: these frames are written
 /// directly to the underlying OS handle (never through a userspace
 /// `BufWriter`), so there is no buffered data to flush, and a flush on a
 /// Windows named pipe (`FlushFileBuffers`) can block until the peer reads —
 /// exactly the unbounded wait this function exists to avoid.
-fn write_frame_all(stream: &mut impl Write, mut data: &[u8], deadline: Duration) -> Result<()> {
+fn write_frame_all(stream: &mut impl Write, data: &[u8], deadline: Duration) -> Result<()> {
+    write_frame_all_with(stream, data, deadline, cfg!(windows))
+}
+
+fn write_frame_all_with(
+    stream: &mut impl Write,
+    mut data: &[u8],
+    deadline: Duration,
+    windows_nowait_zero: bool,
+) -> Result<()> {
     let deadline = Instant::now() + deadline;
     let mut poll_delay = IPC_POLL_MIN;
+    let mut write_cap = data.len().max(1);
     while !data.is_empty() {
         if Instant::now() >= deadline {
             bail!(
                 "protocol frame write timed out; the peer did not drain the data within the I/O deadline"
             );
         }
-        let stalled = match stream.write(data) {
-            #[cfg(windows)]
-            Ok(0) => true,
-            #[cfg(not(windows))]
+        let pending = &data[..data.len().min(write_cap)];
+        let stalled = match stream.write(pending) {
+            Ok(0) if windows_nowait_zero => windows_nowait_write_zero_is_stall(&mut write_cap),
             Ok(0) => bail!("protocol peer closed while receiving the frame"),
             Ok(written) => {
                 data = &data[written..];
@@ -543,6 +557,18 @@ fn write_frame_all(stream: &mut impl Write, mut data: &[u8], deadline: Duration)
         }
     }
     Ok(())
+}
+
+/// After a Windows PIPE_NOWAIT `write` returned `Ok(0)`, shrink the next
+/// attempt if the slice may have been larger than the remaining pipe buffer.
+/// Returns `true` when even a 1-byte write made no progress (real stall).
+fn windows_nowait_write_zero_is_stall(write_cap: &mut usize) -> bool {
+    if *write_cap > 1 {
+        *write_cap /= 2;
+        false
+    } else {
+        true
+    }
 }
 
 pub(crate) fn write_response(stream: &mut impl Write, response: &ResponseEnvelope) -> Result<()> {
@@ -1257,6 +1283,94 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    /// PIPE_NOWAIT named-pipe WriteFile is all-or-nothing: a slice larger than
+    /// the remaining buffer completes with Ok(0) instead of a partial write.
+    /// Issue #27 on 0.8.9: retrying the full remaining frame stalled for 30s.
+    struct AtomicNowaitPipe {
+        max_atomic: usize,
+        written: Vec<u8>,
+    }
+
+    impl Write for AtomicNowaitPipe {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if buf.is_empty() || buf.len() > self.max_atomic {
+                return Ok(0);
+            }
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn windows_nowait_write_zero_shrinks_until_a_one_byte_stall() {
+        let mut write_cap = 700usize;
+        assert!(!windows_nowait_write_zero_is_stall(&mut write_cap));
+        assert_eq!(write_cap, 350);
+        while write_cap > 1 {
+            assert!(!windows_nowait_write_zero_is_stall(&mut write_cap));
+        }
+        assert_eq!(write_cap, 1);
+        assert!(windows_nowait_write_zero_is_stall(&mut write_cap));
+        assert_eq!(write_cap, 1);
+    }
+
+    #[test]
+    fn write_frame_all_chunks_windows_nowait_oversize_zero_writes() {
+        // Reporter's 600-char show / Skill create path: a modest frame larger
+        // than the atomic nowait write size must still be delivered instead of
+        // stalling until IPC_WRITE_DEADLINE.
+        let payload = vec![b'x'; 700];
+        let mut pipe = AtomicNowaitPipe {
+            max_atomic: 64,
+            written: Vec::new(),
+        };
+        write_frame_all_with(&mut pipe, &payload, Duration::from_secs(2), true).unwrap();
+        assert_eq!(pipe.written, payload);
+    }
+
+    #[test]
+    fn write_frame_all_without_nowait_chunking_fails_on_atomic_zero_writes() {
+        // Documents the 0.8.9 failure: treating Windows Ok(0) only as a stall
+        // and retrying the same oversized slice never writes a byte.
+        let payload = vec![b'x'; 700];
+        let mut pipe = AtomicNowaitPipe {
+            max_atomic: 64,
+            written: Vec::new(),
+        };
+        let error = write_frame_all_with(&mut pipe, &payload, Duration::from_millis(80), false)
+            .unwrap_err();
+        assert!(error.to_string().contains("peer closed"), "{error:#}");
+        assert!(pipe.written.is_empty());
+    }
+
+    #[test]
+    fn write_frame_all_times_out_when_even_one_byte_nowait_write_is_zero() {
+        let mut pipe = AtomicNowaitPipe {
+            max_atomic: 0,
+            written: Vec::new(),
+        };
+        let started = Instant::now();
+        let error = write_frame_all_with(&mut pipe, b"hello\n", Duration::from_millis(80), true)
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(pipe.written.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_write_frame_all_treats_ok_zero_as_peer_closed() {
+        let mut pipe = AtomicNowaitPipe {
+            max_atomic: 0,
+            written: Vec::new(),
+        };
+        let error = write_frame_all(&mut pipe, b"hello\n", Duration::from_secs(1)).unwrap_err();
+        assert!(error.to_string().contains("peer closed"), "{error:#}");
+    }
+
     #[test]
     fn read_frame_waits_for_a_delayed_ipc_response() {
         // Issue #24: a client that polls before the server writes must not
@@ -1319,6 +1433,16 @@ mod tests {
         assert_eq!(read_delayed_ipc_request(payload), expected);
     }
 
+    #[test]
+    fn write_frame_all_delivers_a_long_nowait_request_to_a_nowait_reader() {
+        // Issue #27 on 0.8.9: both ends PIPE_NOWAIT, client write_frame_all of
+        // a 600-byte show-sized frame. Production path in call_over_stream.
+        let mut payload = vec![b'a'; 600];
+        payload.push(b'\n');
+        let expected = payload.clone();
+        assert_eq!(write_nowait_ipc_request(payload), expected);
+    }
+
     /// Server-as-reader delayed first byte: wait until the first nowait read
     /// has been attempted, then let the client write. Production wraps only
     /// on Windows; tests wrap too so Linux CI exercises the adapter.
@@ -1357,6 +1481,48 @@ mod tests {
             inner: server,
             signal: Some(first_read_tx),
         }));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let frame = read_frame(&mut reader, Some(deadline)).unwrap();
+        client_thread.join().unwrap();
+        frame
+    }
+
+    /// Client uses the production `write_frame_all` path with both ends in
+    /// nonblocking mode — the reporter's remaining 0.8.9 write-timeout case.
+    fn write_nowait_ipc_request(payload: Vec<u8>) -> Vec<u8> {
+        #[cfg(unix)]
+        let (name, _dir) = {
+            let dir = ShortTempDir::new("nowait-write");
+            let name = dir
+                .path()
+                .join("test.sock")
+                .to_fs_name::<GenericFilePath>()
+                .unwrap();
+            (name, dir)
+        };
+        #[cfg(windows)]
+        let name = {
+            static NEXT_PIPE_ID: AtomicU64 = AtomicU64::new(0);
+            let id = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
+            format!("grok-bridge-nowait-write-test-{}-{id}", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let listener = ListenerOptions::new()
+            .name(name.clone())
+            .create_sync()
+            .unwrap();
+        let mut client = Stream::connect(name).unwrap();
+        let server = listener.accept().unwrap();
+        server.set_nonblocking(true).unwrap();
+        client.set_nonblocking(true).unwrap();
+        let client_thread = thread::spawn(move || {
+            write_frame_all(&mut client, &payload, Duration::from_secs(2)).unwrap();
+        });
+        #[cfg(windows)]
+        let mut reader = BufReader::new(RemapNowaitEmptyRead(server));
+        #[cfg(not(windows))]
+        let mut reader = BufReader::new(server);
         let deadline = Instant::now() + Duration::from_secs(2);
         let frame = read_frame(&mut reader, Some(deadline)).unwrap();
         client_thread.join().unwrap();
